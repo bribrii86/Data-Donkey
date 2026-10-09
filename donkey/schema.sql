@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS records (
 
 CREATE TABLE IF NOT EXISTS events (
     id INTEGER PRIMARY KEY,
-    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    business_id INTEGER REFERENCES businesses(id),
     record_id INTEGER NOT NULL REFERENCES records(id),
     kind TEXT NOT NULL,
     event_date TEXT NOT NULL DEFAULT '',
@@ -63,7 +63,7 @@ CREATE INDEX IF NOT EXISTS idx_events_town ON events(town);
 
 CREATE TABLE IF NOT EXISTS contacts (
     id INTEGER PRIMARY KEY,
-    business_id INTEGER NOT NULL REFERENCES businesses(id),
+    business_id INTEGER REFERENCES businesses(id),
     record_id INTEGER NOT NULL REFERENCES records(id),
     name TEXT NOT NULL DEFAULT '',
     title TEXT NOT NULL DEFAULT '',
