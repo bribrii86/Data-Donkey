@@ -97,11 +97,11 @@ def _street_norm(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", value.casefold()).split())
 
 
-def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int | None, str]:
+def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int | None, str, list[int]]:
     name = values.get("name", "").strip()
     normalized = _norm(name) if name else ""
     if not normalized:
-        return None, "needs_review"
+        return None, "needs_review", []
     same_name = con.execute(
         "SELECT id, zip, street FROM businesses WHERE normalized_name = ? ORDER BY id",
         (normalized,),
@@ -114,11 +114,11 @@ def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int
         or (street and _street_norm(row["street"]) == street)
     ]
     if len(location_matches) == 1:
-        return int(location_matches[0]["id"]), "matched"
+        return int(location_matches[0]["id"]), "matched", []
     if len(location_matches) > 1:
-        return None, "needs_review"
+        return None, "needs_review", [int(row["id"]) for row in location_matches]
     if same_name and not (zip_code or street):
-        return None, "needs_review"
+        return None, "needs_review", [int(row["id"]) for row in same_name]
 
     now = datetime.now(timezone.utc).isoformat()
     cursor = con.execute(
@@ -133,7 +133,7 @@ def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int
             values.get("naics", ""), now, now,
         ),
     )
-    return int(cursor.lastrowid), "new"
+    return int(cursor.lastrowid), "new", []
 
 
 def ingest(
@@ -171,12 +171,16 @@ def ingest(
         }
         for row_number, row in enumerate(rows, start=1):
             values = _mapped_values(row, mapping["columns"])
-            business_id, status = _find_business(con, values)
+            business_id, status, review_candidates = _find_business(con, values)
             counts[status] += 1
             record = con.execute(
-                """INSERT INTO records (source_id, batch_id, row_number, raw_json, business_id, match_status)
-                VALUES (?, ?, ?, ?, ?, ?)""",
-                (source_id, batch_id, row_number, json.dumps(row, ensure_ascii=False, sort_keys=True), business_id, status),
+                """INSERT INTO records
+                (source_id, batch_id, row_number, raw_json, business_id, match_status, review_candidates_json)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    source_id, batch_id, row_number, json.dumps(row, ensure_ascii=False, sort_keys=True),
+                    business_id, status, json.dumps(review_candidates),
+                ),
             )
             record_id = int(record.lastrowid)
             kind = event_map.get("kind")
@@ -221,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ingest failed: {exc}", file=sys.stderr)
         return 1
     if result["duplicate"]:
-        print(f"Already ingested (SHA-256 {hashlib.sha256(Path(args.file).read_bytes()).hexdigest()}); no changes made.")
+        print("Already ingested; no changes made.")
     else:
         print(f"new: {result['new']}; matched: {result['matched']}; needs-review: {result['needs_review']}")
     return 0

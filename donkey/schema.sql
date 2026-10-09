@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS records (
     raw_json TEXT NOT NULL,
     business_id INTEGER REFERENCES businesses(id),
     match_status TEXT NOT NULL CHECK (match_status IN ('new', 'matched', 'needs_review')),
+    review_candidates_json TEXT NOT NULL DEFAULT '[]',
     UNIQUE(batch_id, row_number)
 );
 

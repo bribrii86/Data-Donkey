@@ -1,0 +1,112 @@
+import csv
+import json
+import sqlite3
+
+import pytest
+
+from donkey import __version__, api
+from donkey.ingest import connect, ingest, main
+
+
+def _city_file(path, rows):
+    columns = ["Business Name", "Address", "City", "ZIP", "License No", "Open Date", "NAICS", "Vertical"]
+    with path.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def test_city_ingest_keeps_raw_records_and_duplicate_is_noop(tmp_path):
+    source_file = _city_file(
+        tmp_path / "city.csv",
+        [{"Business Name": "Copper Mesa Dental", "Address": "101 S Desert Ave", "City": "Casa Grande",
+          "ZIP": "85122", "License No": "SYN-1", "Open Date": "2024-03-12", "NAICS": "621210",
+          "Vertical": "dental"}],
+    )
+    db = tmp_path / "donkey.db"
+    first = ingest("city-business-list", source_file, "Synthetic city sample", db)
+    second = ingest("city-business-list", source_file, "Other sender", db)
+
+    assert first["new"] == 1 and first["row_count"] == 1 and not first["duplicate"]
+    assert second["duplicate"] and second["row_count"] == 0
+    con = connect(db)
+    try:
+        assert con.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 1
+        record = con.execute("SELECT raw_json, match_status FROM records").fetchone()
+        assert json.loads(record["raw_json"])["License No"] == "SYN-1"
+        assert record["match_status"] == "new"
+    finally:
+        con.close()
+    assert api.search("casa grande", "dental", db_path=db)[0]["name"] == "Copper Mesa Dental"
+    assert api.lookup("Copper Mesa Dental", db_path=db)[0]["zip"] == "85122"
+
+
+def test_exact_zip_match_and_ambiguous_rows_are_never_merged(tmp_path):
+    source = _city_file(
+        tmp_path / "first.csv",
+        [{"Business Name": "Sunrise Accounting", "Address": "42 N Pinal St", "City": "Casa Grande", "ZIP": "85122"}],
+    )
+    db = tmp_path / "donkey.db"
+    assert ingest("city-business-list", source, "Synthetic", db)["new"] == 1
+
+    match_source = _city_file(
+        tmp_path / "match.csv",
+        [{"Business Name": "Sunrise Accounting LLC", "Address": "different street", "City": "Casa Grande",
+          "ZIP": "85122"}],
+    )
+    assert ingest("city-business-list", match_source, "Synthetic", db)["matched"] == 1
+
+    con = connect(db)
+    try:
+        original = con.execute("SELECT id, normalized_name, zip, street FROM businesses").fetchone()
+        for _ in range(2):
+            con.execute(
+                """INSERT INTO businesses
+                (name, normalized_name, zip, street, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'now', 'now')""",
+                ("Sunrise Accounting", original["normalized_name"], original["zip"], original["street"]),
+            )
+        con.commit()
+    finally:
+        con.close()
+
+    ambiguous_source = _city_file(
+        tmp_path / "ambiguous.csv",
+        [{"Business Name": "Sunrise Accounting", "Address": "42 N Pinal St", "City": "Casa Grande",
+          "ZIP": "85122"}],
+    )
+    result = ingest("city-business-list", ambiguous_source, "Synthetic", db)
+    assert result["needs_review"] == 1
+    review_rows = api.needs_review(db_path=db)
+    assert len(review_rows) == 1
+    assert len(json.loads(review_rows[0]["review_candidates_json"])) == 3
+
+
+def test_ucc_events_and_read_only_queries(tmp_path, capsys, monkeypatch):
+    ucc = tmp_path / "ucc.csv"
+    ucc.write_text("Debtor,Filing Date,File Number,Secured Party\nSynthetic Dental,2026-01-02,F-1,Synthetic Bank\n",
+                   encoding="utf8")
+    db = tmp_path / "donkey.db"
+    monkeypatch.setenv("DONKEY_DB", str(db))
+    assert main(["ingest", "--source", "az-sos-ucc", "--file", str(ucc), "--received-from", "Synthetic source"]) == 0
+    assert "new: 1; matched: 0; needs-review: 0" in capsys.readouterr().out
+    listed = api.events("ucc_filing", since="2026-01-01", db_path=db)
+    assert listed[0]["business_name"] == "Synthetic Dental"
+    assert json.loads(listed[0]["details_json"]) == {"filing_number": "F-1", "secured_party": "Synthetic Bank"}
+    con = api._read_connection(db)
+    try:
+        with pytest.raises(sqlite3.OperationalError, match="readonly"):
+            con.execute("DELETE FROM events")
+    finally:
+        con.close()
+
+
+def test_donkey_version_and_custom_db_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("DONKEY_DB", str(tmp_path / "custom.db"))
+    assert __version__ == "0.4.0"
+    con = connect()
+    try:
+        assert con.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0
+    finally:
+        con.close()

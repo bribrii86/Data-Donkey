@@ -21,7 +21,8 @@ def _read_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 def search(city: str, vertical: str, db_path: str | Path | None = None) -> list[dict]:
     """Find businesses by case-insensitive city and vertical."""
-    with _read_connection(db_path) as con:
+    con = _read_connection(db_path)
+    try:
         rows = con.execute(
             """SELECT * FROM businesses
             WHERE city = ? COLLATE NOCASE AND vertical = ? COLLATE NOCASE
@@ -29,6 +30,8 @@ def search(city: str, vertical: str, db_path: str | Path | None = None) -> list[
             (city.strip(), vertical.strip()),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
 
 
 def events(
@@ -52,8 +55,11 @@ def events(
         query += " AND events.event_date >= ?"
         params.append(since)
     query += " ORDER BY events.event_date, events.id"
-    with _read_connection(db_path) as con:
+    con = _read_connection(db_path)
+    try:
         return [dict(row) for row in con.execute(query, params).fetchall()]
+    finally:
+        con.close()
 
 
 def lookup(name: str, db_path: str | Path | None = None) -> list[dict]:
@@ -61,9 +67,29 @@ def lookup(name: str, db_path: str | Path | None = None) -> list[dict]:
     normalized = _norm(name)
     if not normalized:
         return []
-    with _read_connection(db_path) as con:
+    con = _read_connection(db_path)
+    try:
         rows = con.execute(
             "SELECT * FROM businesses WHERE normalized_name = ? ORDER BY city, zip, id",
             (normalized,),
         ).fetchall()
         return [dict(row) for row in rows]
+    finally:
+        con.close()
+
+
+def needs_review(db_path: str | Path | None = None) -> list[dict]:
+    """List source rows that could not be matched without risking an incorrect merge."""
+    con = _read_connection(db_path)
+    try:
+        rows = con.execute(
+            """SELECT records.*, sources.name AS source_name, batches.file_name,
+            batches.received_at FROM records
+            JOIN sources ON sources.id = records.source_id
+            JOIN batches ON batches.id = records.batch_id
+            WHERE records.match_status = 'needs_review'
+            ORDER BY batches.received_at, records.row_number"""
+        ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        con.close()
