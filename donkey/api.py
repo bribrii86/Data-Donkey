@@ -42,8 +42,9 @@ def events(
 ) -> list[dict]:
     """Find events by kind, optional town list, and inclusive lower event-date bound."""
     town_list = [towns] if isinstance(towns, str) else list(towns or [])
-    query = """SELECT events.*, businesses.name AS business_name, businesses.city AS business_city
-        FROM events LEFT JOIN businesses ON businesses.id = events.business_id
+    query = """SELECT events.*, businesses.name AS business_name, businesses.city AS business_city,
+        records.raw_json AS record_json
+        FROM events JOIN records ON records.id = events.record_id LEFT JOIN businesses ON businesses.id = events.business_id
         WHERE events.kind = ?"""
     params: list[str] = [kind]
     if town_list:

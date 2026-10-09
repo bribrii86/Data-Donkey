@@ -56,3 +56,30 @@ and accept an optional `db_path` for applications and tests.
 CSV, JSON arrays, and JSONL inputs are supported. Existing maps include
 `az-sos-ucc` (creates `ucc_filing` events), `overture-places`, and the generic
 `city-business-list`.
+
+## The Stephanie app reads Data Donkey (v0.4.1)
+
+The app gets UCC filings from `prospects.load_ucc_filings()`, in this order:
+
+1. `STEPHANIE_FAKE_SOURCES=1`: `samples/pilot/ucc_fake.csv`, exactly as before.
+2. `donkey.db` (`DONKEY_DB`, else the repo root) when it has `ucc_filing` events: the debtor is the business
+   name, the secured party and filing number come from the event details, the filing date from `event_date`.
+3. Otherwise `data/ucc.csv` (or `STEPHANIE_UCC_CSV`) as before.
+
+A UCC file uploaded on the Prospects page, or an explicit path, still overrides all of this. With no `donkey.db`
+the app gives the same results as v0.4.0.
+
+## Copy the app's Overture places
+
+```console
+python -m donkey ingest-overture --history-db PATH
+```
+
+Copies the `overture_places` table from `history.db` (default: `STEPHANIE_DB`, else the repo root) into the
+`overture-history-db` source. The batch records the sha256 of the table contents; the same contents are never
+ingested twice, and every row is kept in `records` as JSON.
+
+## Doctor
+
+`python -m stephanie_assistant.cli doctor` prints the `donkey.db` path, row counts per source and when the newest
+batch was received. A missing `donkey.db` is a WARN, not a FAIL.

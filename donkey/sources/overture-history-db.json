@@ -1,0 +1,14 @@
+{
+  "id": "overture-history-db",
+  "name": "Overture places copied from the Stephanie app's history.db",
+  "description": "The overture_places table the Stephanie app already imported into history.db.",
+  "format": "table",
+  "columns": {
+    "name": "name",
+    "address": "street",
+    "street": "street",
+    "city": "city",
+    "zip": "zip",
+    "vertical": "vertical"
+  }
+}
