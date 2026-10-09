@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from stephanie_assistant.prospects import _norm
+from stephanie_assistant.prospects import _norm, _parse_date
 
 ROOT = Path(__file__).resolve().parent.parent
 SOURCE_DIR = Path(__file__).resolve().parent / "sources"
@@ -100,6 +100,11 @@ def _street_norm(value: str) -> str:
     return " ".join(re.sub(r"[^a-z0-9 ]", " ", value.casefold()).split())
 
 
+def _iso_date(value: str) -> str:
+    parsed = _parse_date(value)
+    return parsed.isoformat() if parsed else ""
+
+
 def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int | None, str, list[int]]:
     name = values.get("name", "").strip()
     normalized = _norm(name) if name else ""
@@ -121,6 +126,8 @@ def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int
     if len(location_matches) > 1:
         return None, "needs_review", [int(row["id"]) for row in location_matches]
     if same_name and not (zip_code or street):
+        if len(same_name) == 1:
+            return int(same_name[0]["id"]), "matched", []
         return None, "needs_review", [int(row["id"]) for row in same_name]
 
     now = datetime.now(timezone.utc).isoformat()
@@ -174,6 +181,9 @@ def ingest(
         }
         for row_number, row in enumerate(rows, start=1):
             values = _mapped_values(row, mapping["columns"])
+            for date_field in ("event_date", "open_date"):
+                if values.get(date_field):
+                    values[date_field] = _iso_date(values[date_field])
             business_id, status, review_candidates = _find_business(con, values)
             counts[status] += 1
             record = con.execute(

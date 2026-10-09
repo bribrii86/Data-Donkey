@@ -21,7 +21,7 @@ def test_city_ingest_keeps_raw_records_and_duplicate_is_noop(tmp_path):
     source_file = _city_file(
         tmp_path / "city.csv",
         [{"Business Name": "Copper Mesa Dental", "Address": "101 S Desert Ave", "City": "Casa Grande",
-          "ZIP": "85122", "License No": "SYN-1", "Open Date": "2024-03-12", "NAICS": "621210",
+          "ZIP": "85122", "License No": "SYN-1", "Open Date": "03/12/2024", "NAICS": "621210",
           "Vertical": "dental"}],
     )
     db = tmp_path / "donkey.db"
@@ -35,11 +35,13 @@ def test_city_ingest_keeps_raw_records_and_duplicate_is_noop(tmp_path):
         assert con.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 1
         record = con.execute("SELECT raw_json, match_status FROM records").fetchone()
         assert json.loads(record["raw_json"])["License No"] == "SYN-1"
+        assert json.loads(record["raw_json"])["Open Date"] == "03/12/2024"
         assert record["match_status"] == "new"
     finally:
         con.close()
     assert api.search("casa grande", "dental", db_path=db)[0]["name"] == "Copper Mesa Dental"
     assert api.lookup("Copper Mesa Dental", db_path=db)[0]["zip"] == "85122"
+    assert api.lookup("Copper Mesa Dental", db_path=db)[0]["open_date"] == "2024-03-12"
 
 
 def test_exact_zip_match_and_ambiguous_rows_are_never_merged(tmp_path):
@@ -100,6 +102,53 @@ def test_ucc_events_and_read_only_queries(tmp_path, capsys, monkeypatch):
             con.execute("DELETE FROM events")
     finally:
         con.close()
+
+
+def test_ucc_mdy_dates_filter_by_iso_date_and_keep_raw_values(tmp_path):
+    ucc = tmp_path / "dates.csv"
+    ucc.write_text(
+        "Debtor,Filing Date,File Number,Secured Party\n"
+        "Synthetic Early Filing,12/31/2023,BEFORE,Synthetic Bank\n"
+        "Synthetic Recent Filing,01/15/2024,AFTER,Synthetic Bank\n",
+        encoding="utf8",
+    )
+    db = tmp_path / "donkey.db"
+    assert ingest("az-sos-ucc", ucc, "Synthetic fixture", db)["new"] == 2
+
+    events = api.events("ucc_filing", since="2024-01-01", db_path=db)
+    assert [event["business_name"] for event in events] == ["Synthetic Recent Filing"]
+    assert events[0]["event_date"] == "2024-01-15"
+    con = connect(db)
+    try:
+        records = con.execute("SELECT raw_json FROM records ORDER BY row_number").fetchall()
+        assert json.loads(records[0]["raw_json"])["Filing Date"] == "12/31/2023"
+        assert json.loads(records[1]["raw_json"])["Filing Date"] == "01/15/2024"
+    finally:
+        con.close()
+
+
+def test_repeated_name_only_ucc_rows_share_unique_business(tmp_path):
+    ucc = tmp_path / "repeat-debtor.csv"
+    ucc.write_text(
+        "Debtor,Filing Date,File Number,Secured Party\n"
+        "Synthetic Repeat Debtor,02/01/2024,FIRST,Synthetic Bank\n"
+        "Synthetic Repeat Debtor,03/01/2024,SECOND,Synthetic Bank\n",
+        encoding="utf8",
+    )
+    db = tmp_path / "donkey.db"
+
+    result = ingest("az-sos-ucc", ucc, "Synthetic fixture", db)
+    filings = api.events("ucc_filing", db_path=db)
+    con = connect(db)
+    try:
+        business_count = con.execute("SELECT COUNT(*) FROM businesses").fetchone()[0]
+    finally:
+        con.close()
+
+    assert result["new"] == 1 and result["matched"] == 1 and result["needs_review"] == 0
+    assert business_count == 1
+    assert len(filings) == 2
+    assert len(api.needs_review(db_path=db)) == 0
 
 
 def test_overture_jsonl_nested_columns(tmp_path):
