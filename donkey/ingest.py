@@ -60,7 +60,10 @@ def _read_rows(path: Path, raw: bytes, file_format: str) -> list[dict[str, Any]]
             raise ValueError("JSON input must contain an array of objects")
         return payload
     if file_format == "jsonl":
-        return [json.loads(line) for line in text.splitlines() if line.strip()]
+        rows = [json.loads(line) for line in text.splitlines() if line.strip()]
+        if any(not isinstance(row, dict) for row in rows):
+            raise ValueError("JSONL input must contain one object per line")
+        return rows
     raise ValueError(f"unsupported source format {file_format!r} for {path.name}")
 
 

@@ -73,7 +73,7 @@ def test_exact_zip_match_and_ambiguous_rows_are_never_merged(tmp_path):
 
     ambiguous_source = _city_file(
         tmp_path / "ambiguous.csv",
-        [{"Business Name": "Sunrise Accounting", "Address": "42 N Pinal St", "City": "Casa Grande",
+        [{"Business Name": "Sunrise Accounting", "Address": "42 North Pinal Street", "City": "Casa Grande",
           "ZIP": "85122"}],
     )
     result = ingest("city-business-list", ambiguous_source, "Synthetic", db)
@@ -100,6 +100,20 @@ def test_ucc_events_and_read_only_queries(tmp_path, capsys, monkeypatch):
             con.execute("DELETE FROM events")
     finally:
         con.close()
+
+
+def test_overture_jsonl_nested_columns(tmp_path):
+    source = tmp_path / "places.jsonl"
+    source.write_text(
+        '{"properties":{"name":"Synthetic Accounting","address":{"freeform":"123 Main St",'
+        '"locality":"Mesa","region":"AZ","postcode":"85201"},"primary_category":"accountant"}}\n',
+        encoding="utf8",
+    )
+    db = tmp_path / "donkey.db"
+    result = ingest("overture-places", source, "Synthetic fixture", db)
+    assert result["new"] == 1
+    business = api.search("Mesa", "accountant", db_path=db)[0]
+    assert (business["name"], business["state"], business["zip"]) == ("Synthetic Accounting", "AZ", "85201")
 
 
 def test_donkey_version_and_custom_db_env(monkeypatch, tmp_path):
