@@ -1,8 +1,13 @@
 """v0.5.4: Overture release history and SBA loans. Synthetic rows, fake fetcher; no network."""
 import csv
+from datetime import date
+
+import pytest
+
+import json
 
 from donkey import api, overture, triggers
-from donkey.ingest import ingest, main
+from donkey.ingest import connect, ingest, main
 
 LISTING = ("<ListBucketResult><CommonPrefixes><Prefix>release/2026-08-19.0/</Prefix></CommonPrefixes>"
            "<CommonPrefixes><Prefix>release/2026-09-23.0/</Prefix></CommonPrefixes>"
@@ -33,7 +38,8 @@ def test_releases_keeps_latest_per_date():
 
 def test_overture_history_backfills_then_only_new(tmp_path):
     db = tmp_path / "donkey.db"
-    done = overture.snapshot_new("stephanie", fake_fetch, LISTING, db_path=db, out_dir=tmp_path)
+    saved = date(2026, 10, 10)
+    done = overture.snapshot_new("stephanie", fake_fetch, LISTING, db_path=db, out_dir=tmp_path, today=saved)
     assert [(d["release"], d["rows"]) for d in done] == [("2026-08-19.0", 1), ("2026-09-23.1", 2)]  # Phoenix dropped
     assert done[0]["diff"]["baseline"] is True
     assert done[1]["diff"]["by_kind"] == {"growth_home_to_office": 1, "growth_new_business": 1,
@@ -41,8 +47,14 @@ def test_overture_history_backfills_then_only_new(tmp_path):
     with (tmp_path / "overture-2026-09-23.1-stephanie.csv").open(encoding="utf8") as stream:
         assert {r["date_seen"] for r in csv.DictReader(stream)} == {"2026-09-23"}
     assert overture.snapshot_new("stephanie", fake_fetch, LISTING, db_path=db, out_dir=tmp_path) == []
-    hits = api.call_this_week("stephanie", as_of="2026-10-01", db_path=db)
-    assert [(h["name"], h["score"]) for h in hits] == [("Desert Rose Plumbing", 6), ("Copper Sky Dental", 3)]
+    # Dated the day it was saved, so the Aug-to-Sep changes are on this week's list. Overture scores are lower:
+    # home-to-office 3 + website 1; a bare Overture "new business" (1 point) stays off the list.
+    events = api.events("growth_new_business", db_path=db)
+    assert [(e["event_date"], json.loads(e["details_json"])["score"]) for e in events] == [("2026-10-10", 1)]
+    hits = api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)
+    assert [(h["name"], h["score"], h["signals"]) for h in hits] == [
+        ("Desert Rose Plumbing", 4, ["home_to_office", "new_website"])]
+    assert api.call_this_week("stephanie", as_of="2026-10-12", min_score=1, db_path=db)[1]["name"] == "Copper Sky Dental"
 
 
 def test_area_without_bbox_is_refused(tmp_path, monkeypatch):
@@ -102,3 +114,27 @@ def test_overture_cli_reports(monkeypatch, tmp_path, capsys):
     assert "Overture 2026-08-19.0 (stephanie): 1 places; first release stored" in capsys.readouterr().out
     assert main(["overture-snapshot"]) == 0
     assert "No new Overture release" in capsys.readouterr().out
+
+
+def _sba_file(path, header, rows):
+    with path.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.writer(stream)
+        writer.writerow(header)
+        writer.writerows(rows)
+    return path
+
+
+def test_sba_wrong_columns_refused_and_not_burned(tmp_path):
+    db = tmp_path / "donkey.db"
+    renamed = [h.replace("BorrState", "Borrower_St") for h in SBA_HEADER]  # a future file renames a column
+    bad = _sba_file(tmp_path / "foia.csv", renamed, SBA_ROWS)
+    with pytest.raises(ValueError, match="no column found for state"):
+        ingest("sba-loans", bad, "data.sba.gov", db)
+    no_arizona = _sba_file(tmp_path / "co.csv", SBA_HEADER, [SBA_ROWS[2]])
+    with pytest.raises(ValueError, match="kept 0 of 1 rows"):
+        ingest("sba-loans", no_arizona, "data.sba.gov", db)
+    con = connect(db)
+    assert con.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 0  # neither file is marked as ingested
+    con.close()
+    good = _sba_file(tmp_path / "foia.csv", SBA_HEADER, SBA_ROWS)  # same name, fixed header: goes in
+    assert ingest("sba-loans", good, "data.sba.gov", db)["new"] == 2

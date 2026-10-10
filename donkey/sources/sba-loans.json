@@ -4,6 +4,7 @@
   "description": "Public SBA loan-level files from data.sba.gov (7(a) and 504, fiscal 1991 to now, updated quarterly). Borrower name, address, approval date, amount, lender, NAICS, jobs. Only Arizona rows are kept.",
   "format": "csv",
   "keep": {"state": ["AZ"]},
+  "required": ["name", "state", "event_date"],
   "columns": {
     "name": ["BorrName", "Borrower Name", "BORR_NAME"],
     "street": ["BorrStreet", "Borrower Street", "BORR_STREET"],

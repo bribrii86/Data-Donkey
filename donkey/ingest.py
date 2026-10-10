@@ -181,6 +181,10 @@ def _ingest_rows(
     db_path: str | Path | None,
 ) -> dict[str, Any]:
     source_id = mapping["id"]
+    missing = [f for f in mapping.get("required", []) if f in unmapped_fields(rows, mapping["columns"])]
+    if rows and missing:  # refuse before recording the batch, so the file can be ingested again after a map fix
+        raise ValueError(f"{file_name}: no column found for {', '.join(missing)}; add this file's header names to "
+                         f"donkey/sources/{source_id}.json")
     con = connect(db_path)
     try:
         if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
@@ -245,6 +249,9 @@ def _ingest_rows(
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (business_id, record_id, contact["name"], contact["title"], contact["email"], contact["phone"]),
                 )
+        if rows and keep and skipped == len(rows):  # rolled back below, so the file isn't marked as ingested
+            raise ValueError(f"{file_name}: the map's filter ({', '.join(keep)}) kept 0 of {len(rows)} rows; nothing "
+                             "stored. Check the file and its column names.")
         con.commit()
         return {"duplicate": False, **counts, "row_count": len(rows), "skipped": skipped, "batch_id": batch_id,
                 "sha256": digest,

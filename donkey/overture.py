@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import re
 import urllib.request
+from datetime import date
 from pathlib import Path
 from typing import Any, Callable
 
@@ -25,6 +26,11 @@ _RELEASE = re.compile(r"\d{4}-\d{2}-\d{2}(\.\d+)?")
 COLUMNS = (*growth.FIELDS, "date_seen")
 
 Fetcher = Callable[[str, dict], list[dict[str, str]]]
+
+# Overture changes are weaker evidence than our own scrape: a "new business" is often Overture adding coverage, and a
+# release diff can hold hundreds of changes. Only a home-to-office move reaches call-this-week's 3 points on its own.
+SCORES = {"growth_home_to_office": 3, "growth_moved": 2, "growth_new_business": 1, "growth_new_website": 1,
+          "growth_new_phone": 1, "growth_category_change": 0}
 
 
 def releases(listing: str | None = None) -> list[str]:
@@ -75,7 +81,7 @@ def fetch_rows(release: str, area: dict) -> list[dict[str, str]]:  # pragma: no 
 
 def snapshot_release(
     release: str, area: str = "stephanie", fetch: Fetcher | None = None, db_path: str | Path | None = None,
-    out_dir: str | Path | None = None,
+    out_dir: str | Path | None = None, today: date | None = None,
 ) -> dict[str, Any]:
     """Save one release for the area as CSV, store it as snapshot "overture AREA" dated by the release, and diff it
     with the previous release's snapshot."""
@@ -92,13 +98,16 @@ def snapshot_release(
         writer.writeheader()
         writer.writerows({**{k: r.get(k, "") for k in growth.FIELDS}, "date_seen": day} for r in rows)
     snapshot = growth.take_snapshot(out, f"overture {area}", day, db_path=db_path)
-    diff = None if snapshot["duplicate"] else growth.diff_snapshots(new_id=snapshot["snapshot_id"], db_path=db_path)
+    # Dated the day we saved it (not the release day), so changes land in this week's call-this-week window.
+    saved = (today or date.today()).isoformat()
+    diff = None if snapshot["duplicate"] else growth.diff_snapshots(
+        new_id=snapshot["snapshot_id"], db_path=db_path, event_date=saved, scores=SCORES)
     return {"release": release, "area": area, "rows": len(rows), "csv": str(out), "snapshot": snapshot, "diff": diff}
 
 
 def snapshot_new(
     area: str = "stephanie", fetch: Fetcher | None = None, listing: str | None = None,
-    db_path: str | Path | None = None, out_dir: str | Path | None = None,
+    db_path: str | Path | None = None, out_dir: str | Path | None = None, today: date | None = None,
 ) -> list[dict[str, Any]]:
     """Every release on S3 not yet stored for this area, oldest first. Safe to run weekly: nothing new, no work."""
     con = connect(db_path)
@@ -107,5 +116,5 @@ def snapshot_new(
             "SELECT taken_at FROM snapshots WHERE label = ?", (f"overture {area}",))}
     finally:
         con.close()
-    return [snapshot_release(name, area, fetch, db_path, out_dir) for name in releases(listing)
+    return [snapshot_release(name, area, fetch, db_path, out_dir, today) for name in releases(listing)
             if name[:10] not in stored]
