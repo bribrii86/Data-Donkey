@@ -35,7 +35,8 @@ def load(name: str) -> dict[str, Any]:
         "zips": {str(z)[:5] for z in area.get("zips", [])},
         "zip_prefixes": tuple(str(p) for p in area.get("zip_prefixes", [])),
         "cities": {str(c).casefold() for c in area.get("cities", [])},
-        "towns": [str(c) for c in area.get("cities", [])],  # as written, in file order (runner rotation)
+        "towns": [str(c) for c in area.get("cities", [])],
+        "bbox": [float(x) for x in area.get("bbox", [])],  # lon min, lon max, lat min, lat max (Overture download)  # as written, in file order (runner rotation)
     }
 
 

@@ -6,7 +6,14 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-10)
-- v0.5.3 (stacked on the v0.5.2 PR): weekly growth runner `python -m donkey growth-weekly` (`donkey/runner.py`):
+- v0.5.4: history sources. `python -m donkey overture-snapshot` stores each Overture release for an area (bbox now in
+  areas.json) as snapshot "overture AREA" dated by the release and diffs it; S3 keeps only the latest releases
+  (2026-08-19 and 2026-09-23 on 2026-10-10), so history builds from here. growth-weekly runs it first (free).
+  Needs DuckDB (optional extra). Source map `sba-loans` (SBA 7(a)/504 FOIA CSVs, Arizona rows only via the map's
+  new `keep` filter) adds `sba_loan` events; call-this-week scores loans approved in the last 180 days (3 points). Review fixes: Overture changes are dated
+  the save day and score lower (only home-to-office reaches 3); sba-loans refuses files missing name, state or
+  approval-date columns, and a file that keeps 0 rows is rolled back (not marked ingested).
+- v0.5.3: weekly growth runner `python -m donkey growth-weekly` (`donkey/runner.py`):
   Console research agent per town (rotation from areas.json), hard per-session budget, $25/month cap in the
   `agent_runs` table, call log in ~/DataDonkey/logs, then snapshot + diff. `--install-task` registers the Windows task.
   Buck approved the spend 2026-10-10 20:14 UTC. Not yet run for real (needs agent and environment IDs in .env).

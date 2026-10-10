@@ -169,8 +169,11 @@ def _snapshot_rows(con: sqlite3.Connection, snapshot_id: int) -> list[dict[str, 
 
 def diff_snapshots(
     old_id: int | None = None, new_id: int | None = None, db_path: str | Path | None = None,
+    event_date: str | None = None, scores: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """Diff two snapshots with the same label (default: the latest two) and store each change as an event."""
+    """Diff two snapshots with the same label (default: the latest two) and store each change as an event.
+    Events are dated event_date (default: the new snapshot's date); scores override SCORES per kind for sources
+    whose changes are weaker evidence (Overture)."""
     con = connect(db_path)
     try:
         if new_id is None:
@@ -212,13 +215,15 @@ def diff_snapshots(
                 VALUES (?, ?, ?, ?, NULL, 'new')""",
                 (SOURCE_ID, batch_id, number, json.dumps(change, ensure_ascii=False, sort_keys=True)),
             ).lastrowid)
-            details = {"key": change["key"], "name": after["name"], "score": change["score"],
+            score = (scores or {}).get(change["kind"], change["score"])
+            details = {"key": change["key"], "name": after["name"], "score": score,
                        "before_street": change["before"].get("street", ""), "after_street": after["street"],
                        "home_based": after["home_based"] == "1", "zip": after["zip"]}
             con.execute(
                 """INSERT INTO events (business_id, record_id, kind, event_date, town, details_json)
                 VALUES (NULL, ?, ?, ?, ?, ?)""",
-                (record_id, change["kind"], new["taken_at"], after["city"], json.dumps(details, sort_keys=True)),
+                (record_id, change["kind"], event_date or new["taken_at"], after["city"],
+                 json.dumps(details, sort_keys=True)),
             )
             by_kind[change["kind"]] = by_kind.get(change["kind"], 0) + 1
         con.commit()

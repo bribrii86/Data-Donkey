@@ -182,3 +182,27 @@ DONKEY_RUN_CAP_USD=6
 
 Schedule (Windows): `python -m donkey growth-weekly --install-task` registers "DataDonkey Growth Weekly" for Sunday
 03:00 (`--day`, `--time` to change). Tests use a fake client only.
+
+## History sources: Overture releases and SBA loans (v0.5.4, free)
+
+Older records make the diff useful right away instead of after weeks of snapshots.
+
+**Overture.** `python -m donkey overture-snapshot [--area stephanie] [--release 2026-09-23.0]` downloads every
+Overture release not yet stored for the area (bbox in areas.json, then kept by ZIP or town), saves
+`~/DataDonkey/overture/overture-RELEASE-AREA.csv`, stores it as snapshot `overture AREA` dated by the release, and
+diffs it with the previous release. Overture only keeps its latest releases on S3 (two on 2026-10-10), so this
+history starts now and grows monthly; `growth-weekly` runs this check first on every scheduled run. Needs DuckDB
+(`pip install duckdb`; the Sales-Pilot install already has it). Changes are dated the day they are saved, so a
+backfilled release shows on this week's list. Overture scores are lower than our own scrape (home to office 3, moved
+2, new business, website or phone 1, category 0) because many "new businesses" are only Overture adding coverage:
+only a home-to-office move reaches call-this-week's 3 points on its own.
+
+Source maps can list `required` fields: a file missing any of those columns is refused before anything is recorded,
+and a file whose `keep` filter keeps 0 rows is rolled back, so in both cases it can be ingested again after a fix.
+
+**SBA loans.** Download the 7(a) and 504 FOIA CSVs from data.sba.gov (fiscal 1991 to now, quarterly), then
+`python -m donkey ingest --source sba-loans --file FILE.csv --received-from data.sba.gov` for each. Only Arizona rows
+are stored (`keep` in the source map); the rest are counted as "left out". Each loan is an `sba_loan` event (amount,
+lender, industry, jobs, business age). `call-this-week` gives 3 points to a loan approved in the last 180 days; older
+loans stay as history (who borrowed, when, how much). Column names follow the 2020s file layout; ingest lists any it
+can't find.

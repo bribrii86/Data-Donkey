@@ -181,6 +181,10 @@ def _ingest_rows(
     db_path: str | Path | None,
 ) -> dict[str, Any]:
     source_id = mapping["id"]
+    missing = [f for f in mapping.get("required", []) if f in unmapped_fields(rows, mapping["columns"])]
+    if rows and missing:  # refuse before recording the batch, so the file can be ingested again after a map fix
+        raise ValueError(f"{file_name}: no column found for {', '.join(missing)}; add this file's header names to "
+                         f"donkey/sources/{source_id}.json")
     con = connect(db_path)
     try:
         if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
@@ -202,8 +206,13 @@ def _ingest_rows(
         contact_fields = {
             "name": "contact_name", "title": "contact_title", "email": "contact_email", "phone": "contact_phone",
         }
+        keep = {field: {str(v).strip().casefold() for v in allowed} for field, allowed in (mapping.get("keep") or {}).items()}
+        skipped = 0
         for row_number, row in enumerate(rows, start=1):
             values = _mapped_values(row, mapping["columns"])
+            if any(str(values.get(field, "")).strip().casefold() not in allowed for field, allowed in keep.items()):
+                skipped += 1  # e.g. a national file where only Arizona rows are wanted
+                continue
             for date_field in ("event_date", "open_date"):
                 if values.get(date_field):
                     values[date_field] = _iso_date(values[date_field])
@@ -240,8 +249,12 @@ def _ingest_rows(
                     VALUES (?, ?, ?, ?, ?, ?)""",
                     (business_id, record_id, contact["name"], contact["title"], contact["email"], contact["phone"]),
                 )
+        if rows and keep and skipped == len(rows):  # rolled back below, so the file isn't marked as ingested
+            raise ValueError(f"{file_name}: the map's filter ({', '.join(keep)}) kept 0 of {len(rows)} rows; nothing "
+                             "stored. Check the file and its column names.")
         con.commit()
-        return {"duplicate": False, **counts, "row_count": len(rows), "batch_id": batch_id, "sha256": digest,
+        return {"duplicate": False, **counts, "row_count": len(rows), "skipped": skipped, "batch_id": batch_id,
+                "sha256": digest,
                 "unmapped": unmapped_fields(rows, mapping["columns"])}
     except Exception:
         con.rollback()
@@ -275,6 +288,16 @@ def ingest_overture(
                         received_from, db_path)
 
 
+def _overture_line(result: dict[str, Any]) -> str:
+    diff = result.get("diff") or {}
+    if diff.get("baseline"):
+        change = "first release stored; changes start with the next one"
+    else:
+        kinds = ", ".join(f"{k.removeprefix('growth_')}: {v}" for k, v in sorted(diff.get("by_kind", {}).items()))
+        change = f"{diff.get('changes', 0)} changes ({kinds or 'none'})"
+    return f"Overture {result['release']} ({result['area']}): {result['rows']} places; {change}"
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m donkey")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -305,14 +328,40 @@ def main(argv: list[str] | None = None) -> int:
     weekly.add_argument("--install-task", action="store_true", help="register the weekly Windows scheduled task")
     weekly.add_argument("--day", default="SUN", help="task day, MON to SUN (default SUN)")
     weekly.add_argument("--time", default="03:00", help="task time, HH:MM 24-hour (default 03:00)")
+    ovt = commands.add_parser("overture-snapshot", help="free: store Overture releases for an area and diff them")
+    ovt.add_argument("--area", default="stephanie", help="area from areas.json (needs a bbox)")
+    ovt.add_argument("--release", help="one release, e.g. 2026-09-23.0 (default: every release not yet stored)")
     args = parser.parse_args(argv)
+    if args.command == "overture-snapshot":
+        from . import overture
+
+        try:
+            results = ([overture.snapshot_release(args.release, args.area)] if args.release
+                       else overture.snapshot_new(args.area))
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            print(f"overture-snapshot failed: {exc}", file=sys.stderr)
+            return 1
+        for result in results:
+            print(_overture_line(result))
+        if not results:
+            print("No new Overture release; nothing to do.")
+        return 0
     if args.command == "growth-weekly":
         from . import runner
 
         try:
             if args.install_task:
                 return runner.install_task(args.day, args.time, args.dry_run)
-            result = runner.run_weekly(runner.load_settings(), town=args.town, dry_run=args.dry_run)
+            settings = runner.load_settings()
+            if not args.dry_run:  # free monthly Overture check first, so a paid-run problem never blocks it
+                from . import overture
+
+                try:
+                    for done in overture.snapshot_new(settings["area"]):
+                        print(_overture_line(done))
+                except Exception as exc:  # noqa: BLE001 - optional (DuckDB, network); the paid run still goes
+                    print(f"Overture check skipped: {exc}", file=sys.stderr)
+            result = runner.run_weekly(settings, town=args.town, dry_run=args.dry_run)
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             print(f"growth-weekly failed: {exc}", file=sys.stderr)
             return 1
@@ -375,7 +424,8 @@ def main(argv: list[str] | None = None) -> int:
     if result["duplicate"]:
         print("Already ingested; no changes made.")
     else:
-        print(f"new: {result['new']}; matched: {result['matched']}; needs-review: {result['needs_review']}")
+        print(f"new: {result['new']}; matched: {result['matched']}; needs-review: {result['needs_review']}"
+              + (f"; left out by the map's filter: {result['skipped']}" if result.get("skipped") else ""))
         if result.get("unmapped"):
             print(f"not found in this file (add its column names to the source map): {', '.join(result['unmapped'])}")
     return 0

@@ -26,8 +26,10 @@ SCORES = {
     "ucc_new_bank": 1,
     "ucc_new_other": 1,
     "ucc_lease_ending": 5,  # copier lessor filing whose estimated lease end is within LEASE_LEAD_DAYS
+    "sba_loan": 3,  # SBA 7(a)/504 loan approved within SBA_LOOKBACK_DAYS: financing to grow or buy a business
 }
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
+SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -40,6 +42,7 @@ REASONS = {
     "ucc_new_bank": "new bank lien",
     "ucc_new_other": "new UCC filing",
     "ucc_lease_ending": "copier lease likely ending",
+    "sba_loan": "SBA loan approved",
 }
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
@@ -110,6 +113,24 @@ def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
                    "lease_end_est": end.isoformat()}
 
 
+def _sba_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+    start = (as_of - timedelta(days=SBA_LOOKBACK_DAYS)).isoformat()
+    rows = con.execute(
+        """SELECT events.*, businesses.name AS business_name, businesses.zip AS business_zip FROM events
+        LEFT JOIN businesses ON businesses.id = events.business_id
+        WHERE events.kind = 'sba_loan' AND events.event_date >= ? AND events.event_date <= ?""",
+        (start, as_of.isoformat()),
+    )
+    for row in rows:
+        details = json.loads(row["details_json"])
+        zip_code = details.get("zip") or row["business_zip"] or ""
+        if area and not areas.contains(area, zip_code, row["town"] or ""):
+            continue
+        yield {"name": row["business_name"] or details.get("name", ""), "zip": zip_code, "town": row["town"] or "",
+               "score": SCORES["sba_loan"], "signal": "sba_loan", "date": row["event_date"],
+               "amount": details.get("amount", ""), "lender": details.get("lender", "")}
+
+
 def call_this_week(
     area: str | None = None,
     as_of: str | date | None = None,
@@ -119,7 +140,8 @@ def call_this_week(
     db_path: str | Path | None = None,
 ) -> list[dict]:
     """Businesses to call this week in a named area (areas.json), highest score first. Points from all triggers in
-    the last `days` days (lease-ending triggers count while the lease end is near) are added per business."""
+    the last `days` days (lease-ending triggers count while the lease end is near; SBA loans for
+    SBA_LOOKBACK_DAYS) are added per business."""
     today = as_of if isinstance(as_of, date) else (parse_date(as_of) if as_of else date.today())
     if today is None:
         raise ValueError(f"bad as_of date {as_of!r}")
@@ -128,7 +150,7 @@ def call_this_week(
     con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        hits = [hit for scorer in (_growth_hits, _ucc_hits, *scorers) for hit in scorer(con, area_def, today, since)]
+        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, *scorers) for hit in scorer(con, area_def, today, since)]
     finally:
         con.close()
     totals: dict[str, dict] = {}
