@@ -158,6 +158,18 @@ def ingest(
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     rows = _read_rows(path, raw, mapping.get("format", path.suffix.lstrip(".").lower()))
+    return _ingest_rows(mapping, rows, path.name, digest, received_from, db_path)
+
+
+def _ingest_rows(
+    mapping: dict[str, Any],
+    rows: list[dict[str, Any]],
+    file_name: str,
+    digest: str,
+    received_from: str,
+    db_path: str | Path | None,
+) -> dict[str, Any]:
+    source_id = mapping["id"]
     con = connect(db_path)
     try:
         if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
@@ -171,7 +183,7 @@ def ingest(
         batch = con.execute(
             """INSERT INTO batches (source_id, file_name, sha256, received_at, received_from, row_count)
             VALUES (?, ?, ?, ?, ?, ?)""",
-            (source_id, path.name, digest, now, received_from.strip(), len(rows)),
+            (source_id, file_name, digest, now, received_from.strip(), len(rows)),
         )
         batch_id = int(batch.lastrowid)
         counts = {"new": 0, "matched": 0, "needs_review": 0}
@@ -224,6 +236,30 @@ def ingest(
         con.close()
 
 
+def ingest_overture(
+    history_db: str | Path | None = None,
+    received_from: str = "Stephanie app history.db",
+    db_path: str | Path | None = None,
+) -> dict[str, Any]:
+    """Copy history.db's overture_places table into Data Donkey once per distinct table contents."""
+    if history_db is None:
+        from stephanie_assistant.store import DEFAULT_DB as history_db
+    path = Path(history_db).expanduser()
+    if not path.is_file():
+        raise ValueError(f"history database not found: {path}")
+    src = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    src.row_factory = sqlite3.Row
+    try:
+        rows = [dict(r) for r in src.execute("SELECT * FROM overture_places ORDER BY id")]
+    except sqlite3.Error as exc:
+        raise ValueError(f"{path} has no readable overture_places table: {exc}") from exc
+    finally:
+        src.close()
+    digest = hashlib.sha256(json.dumps(rows, sort_keys=True, ensure_ascii=False).encode("utf8")).hexdigest()
+    return _ingest_rows(load_source("overture-history-db"), rows, f"{path.name}:overture_places", digest,
+                        received_from, db_path)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m donkey")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -231,9 +267,15 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--source", required=True, help="source map ID")
     command.add_argument("--file", required=True, help="path to source file")
     command.add_argument("--received-from", required=True, help="person or organization who supplied the file")
+    overture = commands.add_parser("ingest-overture", help="copy overture_places from the app's history.db")
+    overture.add_argument("--history-db", help="path to history.db (default: STEPHANIE_DB or repo root)")
+    overture.add_argument("--received-from", default="Stephanie app history.db")
     args = parser.parse_args(argv)
     try:
-        result = ingest(args.source, args.file, args.received_from)
+        if args.command == "ingest-overture":
+            result = ingest_overture(args.history_db, args.received_from)
+        else:
+            result = ingest(args.source, args.file, args.received_from)
     except (OSError, ValueError, sqlite3.Error) as exc:
         print(f"ingest failed: {exc}", file=sys.stderr)
         return 1
