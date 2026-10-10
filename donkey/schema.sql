@@ -95,3 +95,22 @@ CREATE TABLE IF NOT EXISTS snapshot_rows (
     home_based INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (snapshot_id, key)
 );
+
+-- v0.5.3: one row per weekly growth runner attempt (paid Console agent calls). The monthly cap sums cost_cents,
+-- or budget_cents while a run has no final cost.
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id INTEGER PRIMARY KEY,
+    started_at TEXT NOT NULL,
+    finished_at TEXT,
+    area TEXT NOT NULL,
+    town TEXT NOT NULL,
+    session_id TEXT,
+    status TEXT NOT NULL,
+    budget_cents INTEGER,
+    cost_cents INTEGER,
+    files INTEGER,
+    rows INTEGER,
+    snapshot_id INTEGER,
+    changes INTEGER,
+    note TEXT
+);
