@@ -13,7 +13,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import areas
+from . import areas, ucc
 from .common import database_path, parse_date
 from .common import norm as _norm
 
@@ -65,6 +65,15 @@ def _growth_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since:
                "street": details.get("after_street", ""), "home_based": details.get("home_based", False)}
 
 
+def _town_in_name(area: dict, name: str) -> str:
+    """An area town named in a business name ("Casa Grande Dairy Co"), longest first; not "<town> County"."""
+    folded = (name or "").casefold()
+    for city in sorted(area["cities"], key=len, reverse=True):
+        if re.search(rf"\b{re.escape(city)}\b(?!\s+county)", folded):
+            return city.title()
+    return ""
+
+
 def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
     rows = con.execute(
         """SELECT events.*, businesses.name AS business_name, businesses.zip AS business_zip,
@@ -73,15 +82,24 @@ def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
     )
     for row in rows:
         details = json.loads(row["details_json"])
+        if "lessor_type" not in details:  # stored before v0.5.2 in a database opened read-only here
+            details.update(ucc.enrich({"secured_party": details.get("secured_party", ""),
+                                       "event_date": row["event_date"] or ""}))
+        name = row["business_name"] or details.get("name", "")
         zip_code = details.get("zip") or row["business_zip"] or ""
         town = row["town"] or row["business_city"] or ""
-        if area and not areas.contains(area, zip_code, town):
+        location = "known" if zip_code or town else "unknown"
+        if area and location == "unknown":
+            # The SOS CSV has no address. Keep the filing in area runs: use a territory town named in the debtor
+            # name if there is one, else show it as location unknown for the rep to check.
+            town = _town_in_name(area, name)
+            location = "debtor name" if town else "unknown"
+        elif area and not areas.contains(area, zip_code, town):
             continue
-        name = row["business_name"] or details.get("name", "")
         filed = parse_date(row["event_date"]) if row["event_date"] else None
         kind = details.get("lessor_type", "")
         base = {"name": name, "zip": zip_code, "town": town, "secured_party": details.get("secured_party", ""),
-                "filing_number": details.get("filing_number", "")}
+                "filing_number": details.get("filing_number", ""), "location": location}
         if filed and since <= filed <= as_of:
             signal = f"ucc_new_{kind}" if f"ucc_new_{kind}" in SCORES else ""
             if signal and SCORES[signal]:

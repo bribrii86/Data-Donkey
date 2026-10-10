@@ -1,6 +1,7 @@
 """v0.5.2: areas, UCC monthly index ingest with lessor tags, and call-this-week scoring. Synthetic rows only."""
 import csv
 import json
+import sqlite3
 
 import pytest
 
@@ -168,3 +169,53 @@ def test_snapshot_area_filter_and_cli(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Example Law Office" in out and "2 to call" in out
     assert main(["call-this-week", "--area", "nowhere"]) == 1
+
+
+# Same columns as the SOS CSV export (data/ucc.csv in Sales-Pilot): no city, no ZIP. Synthetic rows.
+SOS_CSV = ("Debtor,Filing Date,File Number,Secured Party\n"
+           "CASA GRANDE SYNTHETIC CLINIC LLC,10/01/2026,202600000011,GreatAmerica Financial Services\n"
+           "EXAMPLE OFFICE SUPPLY LLC,10/02/2026,202600000012,De Lage Landen Financial Services Inc\n"
+           "MARICOPA COUNTY SAMPLE DISTRICT,10/03/2026,202600000013,GreatAmerica Financial Services\n"
+           "NO PARTY HOLDINGS LLC,10/04/2026,202600000014,\n")
+
+
+def test_sos_csv_rows_stay_in_area_runs(tmp_path):
+    db = tmp_path / "donkey.db"
+    csv_file = tmp_path / "ucc.csv"
+    csv_file.write_text(SOS_CSV, encoding="utf8")
+    ingest("az-sos-ucc", csv_file, "AZ SOS (synthetic)", db)
+    statewide = api.call_this_week(None, as_of="2026-10-12", db_path=db)
+    assert len(statewide) == 3
+    for area in ("stephanie", "arizona", "phoenix-metro"):
+        hits = {h["name"]: h for h in api.call_this_week(area, as_of="2026-10-12", db_path=db)}
+        assert set(hits) == {h["name"] for h in statewide}, area
+    stephanie = {h["name"]: h for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)}
+    clinic = stephanie["CASA GRANDE SYNTHETIC CLINIC LLC"]
+    assert clinic["town"] == "Casa Grande" and clinic["details"][0]["location"] == "debtor name"
+    county = stephanie["MARICOPA COUNTY SAMPLE DISTRICT"]  # a county, not the town of Maricopa
+    assert county["town"] == "" and county["details"][0]["location"] == "unknown"
+
+
+def test_database_from_v050_gets_backfilled(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "donkey.db"
+    monkeypatch.setenv("DONKEY_DB", str(db))
+    csv_file = tmp_path / "ucc.csv"
+    csv_file.write_text(SOS_CSV, encoding="utf8")
+    ingest("az-sos-ucc", csv_file, "AZ SOS (synthetic)", db)
+    con = sqlite3.connect(db)  # rewrite the events the way v0.5.0 stored them: no tags
+    for event_id, details in con.execute("SELECT id, details_json FROM events").fetchall():
+        old = {k: v for k, v in json.loads(details).items() if k in {"filing_number", "secured_party"}}
+        con.execute("UPDATE events SET details_json = ? WHERE id = ?", (json.dumps(old), event_id))
+    con.commit()
+    con.close()
+    # read-only path tags on the fly
+    assert len(api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)) == 3
+    # re-ingesting the same file is skipped by hash, but opening the database stores the tags
+    assert main(["ingest", "--source", "az-sos-ucc", "--file", str(csv_file), "--received-from", "AZ SOS"]) == 0
+    assert "Already ingested" in capsys.readouterr().out
+    tags = [json.loads(e["details_json"]) for e in api.events("ucc_filing", db_path=db)]
+    assert sorted(t["lessor_type"] for t in tags) == ["", "copier_lessor", "copier_lessor", "copier_lessor"]
+    assert all(t["lease_end_est"] for t in tags if t["lessor_type"] == "copier_lessor")
+    assert main(["call-this-week", "--area", "stephanie", "--as-of", "2026-10-12"]) == 0
+    out = capsys.readouterr().out
+    assert "3 to call" in out and "(location unknown)" in out and "(Casa Grande)" in out

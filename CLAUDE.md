@@ -9,7 +9,9 @@ Docs: docs/data-donkey.md.
 - v0.5.2: areas.json (stephanie, pinal, phoenix-metro, tucson-metro, arizona; DONKEY_AREAS overrides); UCC monthly
   index source map `az-sos-ucc-index` (tsv, guessed column names, ingest reports unmapped fields); UCC lessor tags and
   lease-end estimates (`donkey/ucc.py`); `call-this-week` ranking (`donkey/triggers.py`, `api.call_this_week`, app
-  scorer hooks). No SOS index bought yet; no paid API calls.
+  scorer hooks). No SOS index bought yet; no paid API calls. Review fixes: a pre-v0.5.2 donkey.db gets its UCC
+  filings tagged when opened (`ucc.backfill`); `--area` runs keep SOS CSV filings that have no city or ZIP (town from
+  debtor name, else "location unknown"). data/ucc.csv tags 9 filings as copier_lessor.
 - v0.5.1: growth tracking. `python -m donkey growth-snapshot` stores a dated copy of a business list;
   `growth-diff` turns changes (home to office, move, new business, new website/phone) into `growth_*` events with
   points; `donkey.api.growth()` ranks businesses for the Monday list. Plan: Sales-Pilot project files

@@ -134,7 +134,9 @@ python -m donkey ingest --source az-sos-ucc-index --file UCC_INDEX_2026_11.txt -
 Every `ucc_filing` event (from the index or the older `az-sos-ucc` CSV) now carries `name`, `zip` and tags from
 `donkey/ucc.py`: `lessor_type` (copier_lessor, equipment_finance, bank, mca, ag, auto, government, other) from the
 secured party's name, and for lessors `lease_window_start` (filing + 36 months) and `lease_end_est` (filing + 60
-months). Arizona records no collateral, so these are estimates from the lender's name.
+months). Arizona records no collateral, so these are estimates from the lender's name. A database ingested before
+v0.5.2 gets these tags the next time any write command opens it (re-ingesting the same file is skipped by its hash,
+so this backfill is what tags the old filings); `call-this-week` also tags untagged filings on the fly.
 
 **Call this week.** `donkey.api.call_this_week(area, as_of, days=14, min_score=3, scorers=())` ranks businesses by
 adding points from every trigger in the window: growth events (above), a new filing with a copier lessor (4),
@@ -142,6 +144,10 @@ equipment finance (3), bank or other (1), and a copier lease whose estimated end
 `score`, `signals` and plain-language `reasons`. Apps add their own triggers by passing scorer functions (for
 example a permit feed); hits for the same business name and ZIP are added together. Scores live in
 `donkey.triggers.SCORES`.
+
+The older SOS CSV (`az-sos-ucc`) has no city or ZIP. In an area run those filings are kept: when the debtor name
+contains one of the area's towns (not "TOWN County") that town is shown, otherwise the row says "location
+unknown" for the rep to check. Each hit's `details` carry `location`: known, debtor name, or unknown.
 
 ```console
 python -m donkey call-this-week --area stephanie

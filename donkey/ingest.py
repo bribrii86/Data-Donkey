@@ -31,6 +31,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript((Path(__file__).parent / "schema.sql").read_text(encoding="utf8"))
+    ucc.backfill(con)
     return con
 
 
@@ -311,7 +312,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(hits, indent=2))
         else:
             for hit in hits:
-                print(f"{hit['score']:>3}  {hit['name']} ({hit['town'] or hit['zip']}): {'; '.join(hit['reasons'])}")
+                where = hit["town"] or hit["zip"] or "location unknown"
+                print(f"{hit['score']:>3}  {hit['name']} ({where}): {'; '.join(hit['reasons'])}")
             print(f"{len(hits)} to call")
         return 0
     if args.command.startswith("growth-"):

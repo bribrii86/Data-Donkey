@@ -3,12 +3,14 @@ Arizona records no collateral, so the secured party's name is the only clue to w
 
 from __future__ import annotations
 
+import json
 import re
+import sqlite3
 from datetime import date
 
 from .common import parse_date
 
-__all__ = ["LEASE_MONTHS", "classify", "enrich"]
+__all__ = ["LEASE_MONTHS", "backfill", "classify", "enrich"]
 
 # Usual office-equipment lease terms: calls start 36 months after filing, most leases end at 60.
 LEASE_MONTHS = {"window_start": 36, "end": 60}
@@ -62,3 +64,19 @@ def enrich(values: dict[str, str]) -> dict[str, str]:
         out["lease_window_start"] = _add_months(filed, LEASE_MONTHS["window_start"]).isoformat()
         out["lease_end_est"] = _add_months(filed, LEASE_MONTHS["end"]).isoformat()
     return out
+
+
+def backfill(con: sqlite3.Connection) -> int:
+    """Tag ucc_filing events stored before v0.5.2 (no lessor_type yet). Re-ingesting the same file is skipped by its
+    hash, so without this an older donkey.db would never get lessor tags or lease dates. Returns events updated."""
+    rows = con.execute(
+        """SELECT id, event_date, details_json FROM events
+        WHERE kind = 'ucc_filing' AND instr(details_json, '"lessor_type"') = 0"""
+    ).fetchall()
+    for event_id, event_date, details_json in rows:
+        details = json.loads(details_json or "{}")
+        details.update(enrich({"secured_party": details.get("secured_party", ""), "event_date": event_date or ""}))
+        con.execute("UPDATE events SET details_json = ? WHERE id = ?", (json.dumps(details), event_id))
+    if rows:
+        con.commit()
+    return len(rows)
