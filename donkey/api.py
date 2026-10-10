@@ -7,10 +7,11 @@ import sqlite3
 from pathlib import Path
 from typing import Iterable
 
+from . import areas as _areas
 from .common import DEFAULT_DB, database_path
 from .common import norm as _norm
 
-__all__ = ["DEFAULT_DB", "database_path", "events", "growth", "lookup", "needs_review", "search"]
+__all__ = ["DEFAULT_DB", "database_path", "call_this_week", "events", "growth", "lookup", "needs_review", "search"]
 
 
 def _read_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -102,9 +103,12 @@ def growth(
     since: str | None = None,
     min_score: int = 3,
     db_path: str | Path | None = None,
+    area: str | None = None,
 ) -> list[dict]:
     """Businesses whose growth_* events since a date add up to min_score or more, highest first.
+    Filter by town list and/or a named area from areas.json (stephanie, pinal, phoenix-metro, tucson-metro, arizona).
     The Monday list shows these as "call this week"."""
+    area_def = _areas.load(area) if area else None
     town_list = {t.casefold() for t in ([towns] if isinstance(towns, str) else list(towns or []))}
     query = "SELECT * FROM events WHERE kind LIKE 'growth\\_%' ESCAPE '\\'"
     params: list[str] = []
@@ -121,12 +125,22 @@ def growth(
         if town_list and row["town"].casefold() not in town_list:
             continue
         details = json.loads(row["details_json"])
+        if area_def and not _areas.contains(area_def, details.get("zip", ""), row["town"]):
+            continue
         item = totals.setdefault(details["key"], {
             "key": details["key"], "name": details["name"], "town": row["town"], "score": 0, "signals": [],
-            "street": details["after_street"], "home_based": details["home_based"], "last_date": "",
+            "street": details["after_street"], "zip": details.get("zip", ""), "home_based": details["home_based"],
+            "last_date": "",
         })
         item["score"] += int(details["score"])
         item["signals"].append(row["kind"].removeprefix("growth_"))
         item["last_date"] = max(item["last_date"], row["event_date"])
     hits = [item for item in totals.values() if item["score"] >= min_score]
     return sorted(hits, key=lambda item: (-item["score"], item["name"]))
+
+
+def call_this_week(*args, **kwargs) -> list[dict]:
+    """See donkey.triggers.call_this_week."""
+    from .triggers import call_this_week as _call
+
+    return _call(*args, **kwargs)

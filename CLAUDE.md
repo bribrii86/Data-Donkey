@@ -6,6 +6,10 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-10)
+- v0.5.2: areas.json (stephanie, pinal, phoenix-metro, tucson-metro, arizona; DONKEY_AREAS overrides); UCC monthly
+  index source map `az-sos-ucc-index` (tsv, guessed column names, ingest reports unmapped fields); UCC lessor tags and
+  lease-end estimates (`donkey/ucc.py`); `call-this-week` ranking (`donkey/triggers.py`, `api.call_this_week`, app
+  scorer hooks). No SOS index bought yet; no paid API calls.
 - v0.5.1: growth tracking. `python -m donkey growth-snapshot` stores a dated copy of a business list;
   `growth-diff` turns changes (home to office, move, new business, new website/phone) into `growth_*` events with
   points; `donkey.api.growth()` ranks businesses for the Monday list. Plan: Sales-Pilot project files
@@ -15,8 +19,8 @@ Docs: docs/data-donkey.md.
   the user's home folder.
 - Sales-Pilot ships the wheel (`python -m build --wheel`) and installs it in setup.bat. Rebuild and copy the wheel
   there when donkey changes.
-- Next: second weekly snapshot (first real diff); Monday list "call this week" from api.growth(); more imports
-  (Casa Grande city list and other city lists).
+- Next: Sales-Pilot Monday list reads api.call_this_week(); second weekly snapshot (first real diff); first SOS
+  index file (fix column names in the map); more imports (Casa Grande city list and other city lists).
 ## Rules for every agent
 1. Push before replying; confirm local HEAD equals remote branch head and report that SHA. No local-only branches or commits.
 2. Branches start with copilot/ (Copilot) or claude/ (Claude sessions). Review fixes go on the same PR branch.

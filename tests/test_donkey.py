@@ -95,7 +95,10 @@ def test_ucc_events_and_read_only_queries(tmp_path, capsys, monkeypatch):
     assert "new: 1; matched: 0; needs-review: 0" in capsys.readouterr().out
     listed = api.events("ucc_filing", since="2026-01-01", db_path=db)
     assert listed[0]["business_name"] == "Synthetic Dental"
-    assert json.loads(listed[0]["details_json"]) == {"filing_number": "F-1", "secured_party": "Synthetic Bank"}
+    assert json.loads(listed[0]["details_json"]) == {
+        "name": "Synthetic Dental", "filing_number": "F-1", "secured_party": "Synthetic Bank", "zip": "",
+        "lessor_type": "bank", "lease_window_start": "", "lease_end_est": "",
+    }  # v0.5.2 added name, zip and the UCC tags; the original keys are unchanged
     con = api._read_connection(db)
     try:
         with pytest.raises(sqlite3.OperationalError, match="readonly"):
@@ -167,7 +170,7 @@ def test_overture_jsonl_nested_columns(tmp_path):
 
 def test_donkey_version_and_custom_db_env(monkeypatch, tmp_path):
     monkeypatch.setenv("DONKEY_DB", str(tmp_path / "custom.db"))
-    assert __version__ == "0.5.1"
+    assert __version__ == "0.5.2"
     con = connect()
     try:
         assert con.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0

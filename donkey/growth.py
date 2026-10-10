@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import areas
 from .common import norm as _norm
 from .ingest import connect
 
@@ -122,14 +123,19 @@ def diff_rows(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict
 
 
 def take_snapshot(
-    file_path: str | Path, label: str, taken_at: str = "", db_path: str | Path | None = None,
+    file_path: str | Path, label: str, taken_at: str = "", db_path: str | Path | None = None, area: str | None = None,
 ) -> dict[str, Any]:
-    """Store a CSV as a dated snapshot once by SHA-256. taken_at defaults to the file's date_seen, else today."""
+    """Store a CSV as a dated snapshot once by SHA-256. taken_at defaults to the file's date_seen, else today.
+    With area, only rows in that named area (areas.json) are kept, so a statewide file can feed one territory."""
     path = Path(file_path)
     raw = path.read_bytes()
     digest = hashlib.sha256(raw).hexdigest()
     source_rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"))))
     rows = [_clean(r) for r in source_rows]
+    if area:
+        area_def = areas.load(area)
+        rows = [r for r in rows if areas.contains(area_def, r["zip"], r["city"])]
+        digest = hashlib.sha256(raw + f"|area={area}".encode()).hexdigest()
     if not taken_at:
         seen = sorted({(r.get("date_seen") or "").strip() for r in source_rows} - {""})
         taken_at = seen[-1] if seen else datetime.now(timezone.utc).date().isoformat()
@@ -208,7 +214,7 @@ def diff_snapshots(
             ).lastrowid)
             details = {"key": change["key"], "name": after["name"], "score": change["score"],
                        "before_street": change["before"].get("street", ""), "after_street": after["street"],
-                       "home_based": after["home_based"] == "1"}
+                       "home_based": after["home_based"] == "1", "zip": after["zip"]}
             con.execute(
                 """INSERT INTO events (business_id, record_id, kind, event_date, town, details_json)
                 VALUES (NULL, ?, ?, ?, ?, ?)""",

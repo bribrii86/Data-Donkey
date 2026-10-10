@@ -1,0 +1,89 @@
+{
+  "id": "az-sos-ucc-index",
+  "name": "Arizona Secretary of State UCC Monthly Filing Index",
+  "description": "Monthly tab-separated index of every UCC filing keyed in Arizona (debtor, secured party, dates, status; no collateral). Column names are guesses until the first file arrives; add the real header names to each list.",
+  "format": "tsv",
+  "enrich": "ucc",
+  "columns": {
+    "name": [
+      "Debtor Name",
+      "DEBTOR_NAME",
+      "Debtor Organization Name",
+      "Debtor Org Name",
+      "DEBTOR_ORG_NAME",
+      "Organization Name",
+      "Debtor"
+    ],
+    "street": [
+      "Debtor Address",
+      "Debtor Mailing Address",
+      "DEBTOR_ADDRESS",
+      "Debtor Street",
+      "Address",
+      "Address 1"
+    ],
+    "city": [
+      "Debtor City",
+      "DEBTOR_CITY",
+      "City"
+    ],
+    "state": [
+      "Debtor State",
+      "DEBTOR_STATE",
+      "State"
+    ],
+    "zip": [
+      "Debtor Zip",
+      "DEBTOR_ZIP",
+      "Debtor Zip Code",
+      "Zip",
+      "Zip Code",
+      "Postal Code"
+    ],
+    "event_date": [
+      "Filing Date",
+      "FILING_DATE",
+      "File Date",
+      "FILE_DATE",
+      "Date Filed"
+    ],
+    "filing_number": [
+      "File Number",
+      "Filing Number",
+      "FILE_NUMBER",
+      "FILING_NUMBER",
+      "Document Number"
+    ],
+    "secured_party": [
+      "Secured Party",
+      "Secured Party Name",
+      "SECURED_PARTY_NAME",
+      "SP Name",
+      "Secured Party Organization Name"
+    ],
+    "lien_status": [
+      "Status",
+      "Lien Status",
+      "LIEN_STATUS",
+      "Filing Status"
+    ],
+    "lapse_date": [
+      "Lapse Date",
+      "LAPSE_DATE",
+      "Expiration Date"
+    ]
+  },
+  "event": {
+    "kind": "ucc_filing",
+    "date": "event_date",
+    "town": "city",
+    "details": [
+      "name",
+      "filing_number",
+      "secured_party",
+      "lien_status",
+      "lapse_date",
+      "zip"
+    ]
+  }
+}
