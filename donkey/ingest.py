@@ -310,7 +310,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             if args.install_task:
-                return runner.install_task(args.day, args.time)
+                return runner.install_task(args.day, args.time, args.dry_run)
             result = runner.run_weekly(runner.load_settings(), town=args.town, dry_run=args.dry_run)
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             print(f"growth-weekly failed: {exc}", file=sys.stderr)

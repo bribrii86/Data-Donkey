@@ -285,6 +285,9 @@ def run_weekly(
     area = settings["area"]
     con = connect(db_path)
     try:
+        # Read the month's spend and claim this run's budget in one write transaction, so two runs started together
+        # can't both see the same money left. Closing without commit (dry run, missing settings) rolls it back.
+        con.execute("BEGIN IMMEDIATE")
         town = town or pick_town(con, area)
         spent = month_spend(con)
         left = settings["monthly_cap_cents"] - spent
@@ -316,6 +319,7 @@ def run_weekly(
             con.execute(f"UPDATE agent_runs SET {sets} WHERE id = ?", (*fields.values(), run_id))  # nosec B608
             con.commit()
 
+        session_id = None
         try:
             session = client.create_session(settings["agent_id"], settings["environment_id"], budget,
                                             f"Data Donkey weekly growth: {town}")
@@ -341,7 +345,9 @@ def run_weekly(
             return {**result, "status": status, "session_id": session_id, "cost_cents": cost, "files": len(blobs),
                     "rows": rows, "csv": str(out), "snapshot": snapshot, "diff": diff}
         except Exception as exc:
-            update(finished_at=_now(), status="error", note=str(exc)[:500])
+            # No session means nothing was spent; otherwise the cost stays unknown and counts at the full budget.
+            update(finished_at=_now(), status="error", note=str(exc)[:500],
+                   **({} if session_id else {"cost_cents": 0}))
             raise
     finally:
         con.close()
@@ -357,8 +363,11 @@ def task_command(day: str = "SUN", at: str = "03:00", python: str | None = None)
     return ["schtasks", "/Create", "/F", "/SC", "WEEKLY", "/D", day.upper(), "/ST", at, "/TN", TASK_NAME, "/TR", run]
 
 
-def install_task(day: str = "SUN", at: str = "03:00") -> int:
+def install_task(day: str = "SUN", at: str = "03:00", dry_run: bool = False) -> int:
     command = task_command(day, at)
+    if dry_run:
+        print("Would run:", subprocess.list2cmdline(command))
+        return 0
     if os.name != "nt":
         print("Windows only. Command:", subprocess.list2cmdline(command))
         return 1

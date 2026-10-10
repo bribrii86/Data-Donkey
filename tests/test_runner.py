@@ -163,6 +163,17 @@ def test_errors_are_logged_and_dry_run_makes_no_calls(tmp_path):
     con.close()
     assert status == "error" and "HTTP 500" in note
 
+    class NoSession(FakeClient):
+        def create_session(self, *args):
+            raise RuntimeError("POST /v1/sessions failed: HTTP 400")
+
+    with pytest.raises(RuntimeError):
+        _run(tmp_path, NoSession({}), town="Eloy")
+    con = connect(tmp_path / "donkey.db")
+    cost = con.execute("SELECT cost_cents FROM agent_runs ORDER BY id DESC").fetchone()[0]
+    assert cost == 0 and runner.month_spend(con) == 600  # failed create counts $0; the session run counts its budget
+    con.close()
+
     quiet = FakeClient({})
     result = _run(tmp_path, quiet, town="Eloy", dry_run=True)
     assert result["status"] == "dry_run" and "Eloy, Arizona" in result["prompt"] and quiet.calls == []
@@ -191,5 +202,29 @@ def test_task_command_and_cli(tmp_path, monkeypatch, capsys):
     assert main(["growth-weekly", "--dry-run", "--town", "Eloy"]) == 0
     out = capsys.readouterr().out
     assert "town: Eloy (stephanie)" in out and "this run's cap: $6.00" in out
+    assert main(["growth-weekly", "--install-task", "--dry-run", "--day", "MON"]) == 0
+    assert "Would run: schtasks /Create /F /SC WEEKLY /D MON" in capsys.readouterr().out
     monkeypatch.setenv("DONKEY_RUN_AREA", "nowhere")
     assert main(["growth-weekly", "--dry-run"]) == 1
+
+
+def test_cap_check_and_claim_are_one_transaction(tmp_path, monkeypatch):
+    """While another runner is between its cap check and its claim, a second run waits and makes no API call."""
+    db = tmp_path / "donkey.db"
+    connect(db).close()
+
+    def quick_connect(path=None):
+        con = connect(path)
+        con.execute("PRAGMA busy_timeout = 100")
+        return con
+
+    monkeypatch.setattr(runner, "connect", quick_connect)
+    other = sqlite3.connect(db, isolation_level=None)
+    other.execute("BEGIN IMMEDIATE")  # the first run holds the write lock
+    client = FakeClient({})
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        _run(tmp_path, client, town="Eloy")
+    assert client.calls == []
+    other.execute("ROLLBACK")
+    other.close()
+    assert _run(tmp_path, client, town="Eloy")["status"] == "done"
