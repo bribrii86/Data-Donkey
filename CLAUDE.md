@@ -6,6 +6,10 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-10)
+- v0.5.3 (stacked on the v0.5.2 PR): weekly growth runner `python -m donkey growth-weekly` (`donkey/runner.py`):
+  Console research agent per town (rotation from areas.json), hard per-session budget, $25/month cap in the
+  `agent_runs` table, call log in ~/DataDonkey/logs, then snapshot + diff. `--install-task` registers the Windows task.
+  Buck approved the spend 2026-10-10 20:14 UTC. Not yet run for real (needs agent and environment IDs in .env).
 - v0.5.2: areas.json (stephanie, pinal, phoenix-metro, tucson-metro, arizona; DONKEY_AREAS overrides); UCC monthly
   index source map `az-sos-ucc-index` (tsv, guessed column names, ingest reports unmapped fields); UCC lessor tags and
   lease-end estimates (`donkey/ucc.py`); `call-this-week` ranking (`donkey/triggers.py`, `api.call_this_week`, app

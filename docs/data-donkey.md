@@ -152,3 +152,33 @@ unknown" for the rep to check. Each hit's `details` carry `location`: known, deb
 ```console
 python -m donkey call-this-week --area stephanie
 ```
+
+## Weekly growth runner (v0.5.3, paid)
+
+`python -m donkey growth-weekly` asks Buck's Console research agent (Managed Agents API) to list every business in
+one town, downloads the per-page CSVs it saves, merges them into `~/DataDonkey/runs/DATE-TOWN/TOWN.csv`, then runs
+growth-snapshot (label `weekly TOWN`, area filter) and growth-diff. Growth events then show up in `call-this-week`.
+
+- Rotation: one town per run through the area's `cities` in areas.json (default area `stephanie`, 12 towns); towns
+  never run go first, then the one run longest ago. `--town NAME` overrides.
+- Spend: each session gets a hard platform budget of `min(DONKEY_RUN_CAP_USD, monthly cap left)`. The monthly cap
+  (`DONKEY_MONTHLY_CAP_USD`, default 25) is the sum of `agent_runs.cost_cents` this UTC month; a run without a final
+  cost counts at its full budget. Under $1 left: the run is skipped and logged, with no API call.
+- Call log: every HTTP call (method, path, status, seconds; never the key) goes to
+  `~/DataDonkey/logs/console-calls.jsonl`. Every run, skip or error is a row in the `agent_runs` table.
+- Unattended: paused tool calls are denied; custom tools get "not available"; after `DONKEY_RUN_TIMEOUT_MINUTES`
+  (default 90) the session is interrupted and whatever pages were saved are used.
+- `--dry-run` prints the town, budget left and prompt with no API call.
+
+Settings (environment, or `~/DataDonkey/.env`, which is outside the repo; `DONKEY_ENV_FILE` points elsewhere):
+
+```
+ANTHROPIC_API_KEY=...
+DONKEY_AGENT_ID=agent_...          # the Console research agent
+DONKEY_ENVIRONMENT_ID=env_...      # its environment
+DONKEY_MONTHLY_CAP_USD=25
+DONKEY_RUN_CAP_USD=6
+```
+
+Schedule (Windows): `python -m donkey growth-weekly --install-task` registers "DataDonkey Growth Weekly" for Sunday
+03:00 (`--day`, `--time` to change). Tests use a fake client only.

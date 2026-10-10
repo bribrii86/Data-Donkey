@@ -299,7 +299,33 @@ def main(argv: list[str] | None = None) -> int:
     diff = commands.add_parser("growth-diff", help="turn changes between the latest two snapshots into events")
     diff.add_argument("--old", type=int, help="older snapshot ID (default: previous with the same label)")
     diff.add_argument("--new", type=int, help="newer snapshot ID (default: latest)")
+    weekly = commands.add_parser("growth-weekly", help="paid: run the Console agent for one town, then snapshot+diff")
+    weekly.add_argument("--town", help="town to run (default: next in the area's rotation)")
+    weekly.add_argument("--dry-run", action="store_true", help="show town, budget and prompt; no API calls")
+    weekly.add_argument("--install-task", action="store_true", help="register the weekly Windows scheduled task")
+    weekly.add_argument("--day", default="SUN", help="task day, MON to SUN (default SUN)")
+    weekly.add_argument("--time", default="03:00", help="task time, HH:MM 24-hour (default 03:00)")
     args = parser.parse_args(argv)
+    if args.command == "growth-weekly":
+        from . import runner
+
+        try:
+            if args.install_task:
+                return runner.install_task(args.day, args.time, args.dry_run)
+            result = runner.run_weekly(runner.load_settings(), town=args.town, dry_run=args.dry_run)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            print(f"growth-weekly failed: {exc}", file=sys.stderr)
+            return 1
+        if result["status"] == "dry_run":
+            print(f"town: {result['town']} ({result['area']}); this month: ${result['month_spent_cents'] / 100:.2f} "
+                  f"spent; this run's cap: ${result['budget_cents'] / 100:.2f}\n\n{result['prompt']}")
+        elif result["status"] == "skipped_cap":
+            print(f"Skipped {result['town']}: monthly cap reached (${result['month_spent_cents'] / 100:.2f} spent).")
+        else:
+            diff = result.get("diff") or {}
+            print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} rows "
+                  f"from {result['files']} files, {diff.get('changes', 0)} growth changes. CSV: {result['csv']}")
+        return 0
     if args.command == "call-this-week":
         from .triggers import call_this_week
 
