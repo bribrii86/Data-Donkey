@@ -18,9 +18,10 @@ from typing import Any
 from .common import DEFAULT_DB, database_path
 from .common import norm as _norm
 from .common import parse_date as _parse_date
+from . import ucc
 
 SOURCE_DIR = Path(__file__).resolve().parent / "sources"
-__all__ = ["DEFAULT_DB", "connect", "database_path", "ingest", "ingest_overture", "load_source", "main"]
+__all__ = ["DEFAULT_DB", "connect", "database_path", "ingest", "ingest_overture", "load_source", "main", "unmapped_fields"]
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
@@ -30,6 +31,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript((Path(__file__).parent / "schema.sql").read_text(encoding="utf8"))
+    ucc.backfill(con)
     return con
 
 
@@ -47,8 +49,9 @@ def load_source(source_id: str) -> dict[str, Any]:
 
 def _read_rows(path: Path, raw: bytes, file_format: str) -> list[dict[str, Any]]:
     text = raw.decode("utf-8-sig")
-    if file_format == "csv":
-        return [dict(row) for row in csv.DictReader(io.StringIO(text))]
+    if file_format in {"csv", "tsv"}:
+        delimiter = "\t" if file_format == "tsv" else ","
+        return [dict(row) for row in csv.DictReader(io.StringIO(text), delimiter=delimiter)]
     if file_format == "json":
         payload = json.loads(text)
         if isinstance(payload, dict):
@@ -91,6 +94,17 @@ def _mapped_values(row: dict[str, Any], columns: dict[str, Any]) -> dict[str, st
                 break
         output.setdefault(field, "")
     return output
+
+
+def unmapped_fields(rows: list[dict[str, Any]], columns: dict[str, Any]) -> list[str]:
+    """Mapped fields whose column names appear nowhere in the file's header: add the real names to the map."""
+    header = {str(k).strip().casefold() for k in (rows[0] if rows else {})}
+    missing = []
+    for field, specification in columns.items():
+        keys = specification if isinstance(specification, list) else [specification]
+        if not any(isinstance(k, str) and (k.strip().casefold() in header or "." in k) for k in keys):
+            missing.append(field)
+    return missing
 
 
 def _street_norm(value: str) -> str:
@@ -208,6 +222,8 @@ def _ingest_rows(
             kind = event_map.get("kind")
             if kind:
                 details = {key: values.get(key, "") for key in event_map.get("details", [])}
+                if mapping.get("enrich") == "ucc":
+                    details.update(ucc.enrich(values))
                 con.execute(
                     """INSERT INTO events (business_id, record_id, kind, event_date, town, details_json)
                     VALUES (?, ?, ?, ?, ?, ?)""",
@@ -225,7 +241,8 @@ def _ingest_rows(
                     (business_id, record_id, contact["name"], contact["title"], contact["email"], contact["phone"]),
                 )
         con.commit()
-        return {"duplicate": False, **counts, "row_count": len(rows), "batch_id": batch_id, "sha256": digest}
+        return {"duplicate": False, **counts, "row_count": len(rows), "batch_id": batch_id, "sha256": digest,
+                "unmapped": unmapped_fields(rows, mapping["columns"])}
     except Exception:
         con.rollback()
         raise
@@ -268,7 +285,59 @@ def main(argv: list[str] | None = None) -> int:
     overture = commands.add_parser("ingest-overture", help="copy overture_places from the app's history.db")
     overture.add_argument("--history-db", help="path to the app's history.db (default: STEPHANIE_DB)")
     overture.add_argument("--received-from", default="Stephanie app history.db")
+    snap = commands.add_parser("growth-snapshot", help="store a dated copy of a business list CSV")
+    snap.add_argument("--file", required=True, help="CSV with name, street, city, zip, phone, website, category")
+    snap.add_argument("--label", required=True, help="list name; snapshots with the same label are diffed")
+    snap.add_argument("--taken-at", default="", help="YYYY-MM-DD (default: the file's date_seen, else today)")
+    snap.add_argument("--area", help="keep only rows in this area (see areas.json), e.g. stephanie, phoenix-metro")
+    calls = commands.add_parser("call-this-week", help="rank businesses to call this week in an area")
+    calls.add_argument("--area", help="area from areas.json (default: all)")
+    calls.add_argument("--as-of", help="YYYY-MM-DD (default: today)")
+    calls.add_argument("--days", type=int, default=14, help="look back this many days (default 14)")
+    calls.add_argument("--min-score", type=int, default=3)
+    calls.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    diff = commands.add_parser("growth-diff", help="turn changes between the latest two snapshots into events")
+    diff.add_argument("--old", type=int, help="older snapshot ID (default: previous with the same label)")
+    diff.add_argument("--new", type=int, help="newer snapshot ID (default: latest)")
     args = parser.parse_args(argv)
+    if args.command == "call-this-week":
+        from .triggers import call_this_week
+
+        try:
+            hits = call_this_week(args.area, args.as_of, args.days, args.min_score)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"call-this-week failed: {exc}", file=sys.stderr)
+            return 1
+        if args.json:
+            print(json.dumps(hits, indent=2))
+        else:
+            for hit in hits:
+                where = hit["town"] or hit["zip"] or "location unknown"
+                print(f"{hit['score']:>3}  {hit['name']} ({where}): {'; '.join(hit['reasons'])}")
+            print(f"{len(hits)} to call")
+        return 0
+    if args.command.startswith("growth-"):
+        from . import growth  # imported here: growth imports this module
+
+        try:
+            if args.command == "growth-snapshot":
+                result = growth.take_snapshot(args.file, args.label, args.taken_at, area=args.area)
+                print("Already stored; no changes made." if result["duplicate"] else
+                      f"snapshot {result['snapshot_id']}: {result['row_count']} rows, "
+                      f"{result['home_based']} look home-based")
+            else:
+                result = growth.diff_snapshots(args.old, args.new)
+                if result.get("baseline"):
+                    print("First snapshot for this list; nothing to compare yet.")
+                elif result.get("duplicate"):
+                    print("Already diffed; no changes made.")
+                else:
+                    kinds = ", ".join(f"{k.removeprefix('growth_')}: {v}" for k, v in sorted(result["by_kind"].items()))
+                    print(f"snapshots {result['old_id']} to {result['new_id']}: {result['changes']} changes ({kinds})")
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"growth failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     try:
         if args.command == "ingest-overture":
             result = ingest_overture(args.history_db, args.received_from)
@@ -281,6 +350,8 @@ def main(argv: list[str] | None = None) -> int:
         print("Already ingested; no changes made.")
     else:
         print(f"new: {result['new']}; matched: {result['matched']}; needs-review: {result['needs_review']}")
+        if result.get("unmapped"):
+            print(f"not found in this file (add its column names to the source map): {', '.join(result['unmapped'])}")
     return 0
 
 

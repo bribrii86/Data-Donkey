@@ -91,3 +91,64 @@ ingested twice, and every row is kept in `records` as JSON.
 
 `python -m stephanie_assistant.cli doctor` prints the `donkey.db` path, row counts per source and when the newest
 batch was received. A missing `donkey.db` is a WARN, not a FAIL.
+
+## Growth tracking (v0.5.1)
+
+Store a dated copy (snapshot) of any business list, then diff it against the
+previous copy with the same label. Each change becomes a `growth_*` event:
+
+```console
+python -m donkey growth-snapshot --file casa-grande-offices-2026-10-17.csv --label "casa grande offices"
+python -m donkey growth-diff
+```
+
+- Columns: `name, street, city, zip, phone, website, category`, optional
+  `home_based` and `date_seen` (the snapshot date; else `--taken-at`, else today).
+- Rows match across snapshots on phone + name, else name + ZIP.
+- Events and points: `growth_home_to_office` 5 (home address to a suite or
+  commercial street), `growth_new_business` 3, `growth_moved` 3,
+  `growth_new_website` 1, `growth_new_phone` 1, `growth_category_change` 1.
+  Rows that disappear are not reported (usually a missed page, not a closure).
+- `home_based` is a guess when the file lacks the column: a PO box, or a trade
+  (plumber, landscaper, cleaner...) at a street address with no suite that is
+  not on an arterial (Pkwy, Blvd, Hwy, Pinal Ave, Maricopa Rd, Main St).
+- `donkey.api.growth(towns, since, min_score=3)` sums points per business,
+  highest first. The Monday list shows these as "call this week".
+- Snapshot and diff are stored once each (SHA-256 / snapshot pair).
+
+## Areas, UCC monthly index and "call this week" (v0.5.2)
+
+**Areas.** `donkey/areas.json` names the sales areas: `stephanie` (her 12 ZIPs and towns), `pinal`,
+`phoenix-metro` (ZIP prefixes 850/852/853), `tucson-metro` (856/857) and `arizona`. The non-Stephanie lists are
+approximate; edit the file, or point `DONKEY_AREAS` at a replacement for another dealer. `growth-snapshot --area`
+keeps only rows in an area; `api.growth(area=...)` and `call-this-week --area` filter by it.
+
+**UCC monthly index.** The source map `az-sos-ucc-index` reads the SOS Monthly Filing Index (tab-separated). Its
+column names are guesses until the first file arrives: each field lists candidate header names, and ingest prints the
+fields it could not find ("not found in this file") so the real names can be added to the map.
+
+```console
+python -m donkey ingest --source az-sos-ucc-index --file UCC_INDEX_2026_11.txt --received-from "AZ SOS"
+```
+
+Every `ucc_filing` event (from the index or the older `az-sos-ucc` CSV) now carries `name`, `zip` and tags from
+`donkey/ucc.py`: `lessor_type` (copier_lessor, equipment_finance, bank, mca, ag, auto, government, other) from the
+secured party's name, and for lessors `lease_window_start` (filing + 36 months) and `lease_end_est` (filing + 60
+months). Arizona records no collateral, so these are estimates from the lender's name. A database ingested before
+v0.5.2 gets these tags the next time any write command opens it (re-ingesting the same file is skipped by its hash,
+so this backfill is what tags the old filings); `call-this-week` also tags untagged filings on the fly.
+
+**Call this week.** `donkey.api.call_this_week(area, as_of, days=14, min_score=3, scorers=())` ranks businesses by
+adding points from every trigger in the window: growth events (above), a new filing with a copier lessor (4),
+equipment finance (3), bank or other (1), and a copier lease whose estimated end is within 180 days (5). Each row has
+`score`, `signals` and plain-language `reasons`. Apps add their own triggers by passing scorer functions (for
+example a permit feed); hits for the same business name and ZIP are added together. Scores live in
+`donkey.triggers.SCORES`.
+
+The older SOS CSV (`az-sos-ucc`) has no city or ZIP. In an area run those filings are kept: when the debtor name
+contains one of the area's towns (not "TOWN County") that town is shown, otherwise the row says "location
+unknown" for the rep to check. Each hit's `details` carry `location`: known, debtor name, or unknown.
+
+```console
+python -m donkey call-this-week --area stephanie
+```
