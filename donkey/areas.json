@@ -2,24 +2,129 @@
   "_note": "Sales areas. A row is in an area when its ZIP is listed, its ZIP starts with a listed prefix, or its city is listed. Edit freely; DONKEY_AREAS points to a replacement file. ZIP lists outside stephanie are approximate.",
   "stephanie": {
     "label": "Stephanie's territory (west and central Pinal)",
-    "zips": ["85122", "85123", "85128", "85131", "85132", "85138", "85139", "85141", "85172", "85191", "85193", "85194"],
-    "cities": ["Maricopa", "Ak-Chin", "Stanfield", "Casa Grande", "Arizona City", "Eloy", "Picacho", "Toltec", "Coolidge", "Valley Farms", "Florence", "Hidden Valley"]
+    "zips": [
+      "85122",
+      "85123",
+      "85128",
+      "85131",
+      "85132",
+      "85138",
+      "85139",
+      "85141",
+      "85172",
+      "85191",
+      "85193",
+      "85194"
+    ],
+    "cities": [
+      "Maricopa",
+      "Ak-Chin",
+      "Stanfield",
+      "Casa Grande",
+      "Arizona City",
+      "Eloy",
+      "Picacho",
+      "Toltec",
+      "Coolidge",
+      "Valley Farms",
+      "Florence",
+      "Hidden Valley"
+    ],
+    "bbox": [
+      -112.42,
+      -111.26,
+      32.58,
+      33.19
+    ]
   },
   "pinal": {
     "label": "Pinal County (approximate)",
-    "zips": ["85118", "85119", "85120", "85121", "85122", "85123", "85128", "85131", "85132", "85137", "85138", "85139", "85140", "85141", "85143", "85145", "85147", "85172", "85173", "85191", "85192", "85193", "85194", "85618", "85623", "85631"],
-    "cities": ["Apache Junction", "San Tan Valley", "Gold Canyon", "Superior", "Kearny", "Mammoth", "San Manuel", "Oracle", "Red Rock", "Saddlebrooke"]
+    "zips": [
+      "85118",
+      "85119",
+      "85120",
+      "85121",
+      "85122",
+      "85123",
+      "85128",
+      "85131",
+      "85132",
+      "85137",
+      "85138",
+      "85139",
+      "85140",
+      "85141",
+      "85143",
+      "85145",
+      "85147",
+      "85172",
+      "85173",
+      "85191",
+      "85192",
+      "85193",
+      "85194",
+      "85618",
+      "85623",
+      "85631"
+    ],
+    "cities": [
+      "Apache Junction",
+      "San Tan Valley",
+      "Gold Canyon",
+      "Superior",
+      "Kearny",
+      "Mammoth",
+      "San Manuel",
+      "Oracle",
+      "Red Rock",
+      "Saddlebrooke"
+    ],
+    "bbox": [
+      -112.21,
+      -110.45,
+      32.5,
+      33.47
+    ]
   },
   "phoenix-metro": {
     "label": "Phoenix metro / Maricopa County (approximate, by ZIP prefix)",
-    "zip_prefixes": ["850", "852", "853"]
+    "zip_prefixes": [
+      "850",
+      "852",
+      "853"
+    ],
+    "bbox": [
+      -112.95,
+      -111.45,
+      33.05,
+      34.0
+    ]
   },
   "tucson-metro": {
     "label": "Tucson metro / Pima County (approximate, by ZIP prefix)",
-    "zip_prefixes": ["856", "857"]
+    "zip_prefixes": [
+      "856",
+      "857"
+    ],
+    "bbox": [
+      -111.4,
+      -110.45,
+      31.85,
+      32.65
+    ]
   },
   "arizona": {
     "label": "All of Arizona",
-    "zip_prefixes": ["85", "86"]
-  }
+    "zip_prefixes": [
+      "85",
+      "86"
+    ],
+    "bbox": [
+      -114.82,
+      -109.04,
+      31.33,
+      37.01
+    ]
+  },
+  "_bbox": "lon min, lon max, lat min, lat max; approximate boxes used only to cut the Overture download, rows are then kept by ZIP or town"
 }

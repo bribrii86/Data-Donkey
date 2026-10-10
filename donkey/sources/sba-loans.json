@@ -1,0 +1,29 @@
+{
+  "id": "sba-loans",
+  "name": "SBA 7(a) and 504 loans (FOIA)",
+  "description": "Public SBA loan-level files from data.sba.gov (7(a) and 504, fiscal 1991 to now, updated quarterly). Borrower name, address, approval date, amount, lender, NAICS, jobs. Only Arizona rows are kept.",
+  "format": "csv",
+  "keep": {"state": ["AZ"]},
+  "columns": {
+    "name": ["BorrName", "Borrower Name", "BORR_NAME"],
+    "street": ["BorrStreet", "Borrower Street", "BORR_STREET"],
+    "city": ["BorrCity", "Borrower City", "BORR_CITY"],
+    "state": ["BorrState", "Borrower State", "BORR_STATE"],
+    "zip": ["BorrZip", "Borrower Zip", "BORR_ZIP"],
+    "event_date": ["ApprovalDate", "Approval Date", "APPROVAL_DATE"],
+    "amount": ["GrossApproval", "Gross Approval", "GROSS_APPROVAL"],
+    "lender": ["BankName", "ThirdPartyLender_Name", "CDC_Name", "Bank Name"],
+    "program": ["Program", "Subprogram"],
+    "naics": ["NaicsCode", "NAICS Code", "NAICS_CODE"],
+    "industry": ["NaicsDescription", "NAICS Description"],
+    "jobs": ["JobsSupported", "Jobs Supported"],
+    "business_age": ["BusinessAge", "Business Age"],
+    "loan_status": ["LoanStatus", "Loan Status"]
+  },
+  "event": {
+    "kind": "sba_loan",
+    "date": "event_date",
+    "town": "city",
+    "details": ["name", "zip", "amount", "lender", "program", "industry", "jobs", "business_age", "loan_status"]
+  }
+}
