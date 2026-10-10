@@ -268,7 +268,36 @@ def main(argv: list[str] | None = None) -> int:
     overture = commands.add_parser("ingest-overture", help="copy overture_places from the app's history.db")
     overture.add_argument("--history-db", help="path to the app's history.db (default: STEPHANIE_DB)")
     overture.add_argument("--received-from", default="Stephanie app history.db")
+    snap = commands.add_parser("growth-snapshot", help="store a dated copy of a business list CSV")
+    snap.add_argument("--file", required=True, help="CSV with name, street, city, zip, phone, website, category")
+    snap.add_argument("--label", required=True, help="list name; snapshots with the same label are diffed")
+    snap.add_argument("--taken-at", default="", help="YYYY-MM-DD (default: the file's date_seen, else today)")
+    diff = commands.add_parser("growth-diff", help="turn changes between the latest two snapshots into events")
+    diff.add_argument("--old", type=int, help="older snapshot ID (default: previous with the same label)")
+    diff.add_argument("--new", type=int, help="newer snapshot ID (default: latest)")
     args = parser.parse_args(argv)
+    if args.command.startswith("growth-"):
+        from . import growth  # imported here: growth imports this module
+
+        try:
+            if args.command == "growth-snapshot":
+                result = growth.take_snapshot(args.file, args.label, args.taken_at)
+                print("Already stored; no changes made." if result["duplicate"] else
+                      f"snapshot {result['snapshot_id']}: {result['row_count']} rows, "
+                      f"{result['home_based']} look home-based")
+            else:
+                result = growth.diff_snapshots(args.old, args.new)
+                if result.get("baseline"):
+                    print("First snapshot for this list; nothing to compare yet.")
+                elif result.get("duplicate"):
+                    print("Already diffed; no changes made.")
+                else:
+                    kinds = ", ".join(f"{k.removeprefix('growth_')}: {v}" for k, v in sorted(result["by_kind"].items()))
+                    print(f"snapshots {result['old_id']} to {result['new_id']}: {result['changes']} changes ({kinds})")
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"growth failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     try:
         if args.command == "ingest-overture":
             result = ingest_overture(args.history_db, args.received_from)

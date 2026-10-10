@@ -71,3 +71,27 @@ CREATE TABLE IF NOT EXISTS contacts (
     email TEXT NOT NULL DEFAULT '',
     phone TEXT NOT NULL DEFAULT ''
 );
+
+-- Growth tracking (v0.5.1): dated copies of a business list; growth-diff turns changes into growth_* events.
+CREATE TABLE IF NOT EXISTS snapshots (
+    id INTEGER PRIMARY KEY,
+    label TEXT NOT NULL,
+    taken_at TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    sha256 TEXT NOT NULL UNIQUE,
+    row_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS snapshot_rows (
+    snapshot_id INTEGER NOT NULL REFERENCES snapshots(id),
+    key TEXT NOT NULL,
+    name TEXT NOT NULL DEFAULT '',
+    street TEXT NOT NULL DEFAULT '',
+    city TEXT NOT NULL DEFAULT '',
+    zip TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    website TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    home_based INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (snapshot_id, key)
+);

@@ -6,12 +6,17 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-10)
+- v0.5.1: growth tracking. `python -m donkey growth-snapshot` stores a dated copy of a business list;
+  `growth-diff` turns changes (home to office, move, new business, new website/phone) into `growth_*` events with
+  points; `donkey.api.growth()` ranks businesses for the Monday list. Plan: Sales-Pilot project files
+  data-donkey/growth-tracker-plan-2026-10-10.md. Not yet wired into the Sales-Pilot Monday list.
 - v0.5.0: split out of the Sales-Pilot repo (was Data-Donkey) with history; no longer imports the app
   (`donkey/common.py` holds the name and date helpers); pip-installable (pyproject.toml); default database moved to
   the user's home folder.
 - Sales-Pilot ships the wheel (`python -m build --wheel`) and installs it in setup.bat. Rebuild and copy the wheel
   there when donkey changes.
-- Next: v0.5.x more imports (Casa Grande city list and other city lists).
+- Next: second weekly snapshot (first real diff); Monday list "call this week" from api.growth(); more imports
+  (Casa Grande city list and other city lists).
 ## Rules for every agent
 1. Push before replying; confirm local HEAD equals remote branch head and report that SHA. No local-only branches or commits.
 2. Branches start with copilot/ (Copilot) or claude/ (Claude sessions). Review fixes go on the same PR branch.

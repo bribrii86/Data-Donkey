@@ -91,3 +91,27 @@ ingested twice, and every row is kept in `records` as JSON.
 
 `python -m stephanie_assistant.cli doctor` prints the `donkey.db` path, row counts per source and when the newest
 batch was received. A missing `donkey.db` is a WARN, not a FAIL.
+
+## Growth tracking (v0.5.1)
+
+Store a dated copy (snapshot) of any business list, then diff it against the
+previous copy with the same label. Each change becomes a `growth_*` event:
+
+```console
+python -m donkey growth-snapshot --file casa-grande-offices-2026-10-17.csv --label "casa grande offices"
+python -m donkey growth-diff
+```
+
+- Columns: `name, street, city, zip, phone, website, category`, optional
+  `home_based` and `date_seen` (the snapshot date; else `--taken-at`, else today).
+- Rows match across snapshots on phone + name, else name + ZIP.
+- Events and points: `growth_home_to_office` 5 (home address to a suite or
+  commercial street), `growth_new_business` 3, `growth_moved` 3,
+  `growth_new_website` 1, `growth_new_phone` 1, `growth_category_change` 1.
+  Rows that disappear are not reported (usually a missed page, not a closure).
+- `home_based` is a guess when the file lacks the column: a PO box, or a trade
+  (plumber, landscaper, cleaner...) at a street address with no suite that is
+  not on an arterial (Pkwy, Blvd, Hwy, Pinal Ave, Maricopa Rd, Main St).
+- `donkey.api.growth(towns, since, min_score=3)` sums points per business,
+  highest first. The Monday list shows these as "call this week".
+- Snapshot and diff are stored once each (SHA-256 / snapshot pair).
