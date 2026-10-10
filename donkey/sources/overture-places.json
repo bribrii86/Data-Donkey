@@ -1,0 +1,16 @@
+{
+  "id": "overture-places",
+  "name": "Overture Maps Places",
+  "description": "Business places exported from Overture Maps.",
+  "format": "jsonl",
+  "columns": {
+    "name": ["name", "properties.name"],
+    "address": ["address", "properties.address.freeform"],
+    "street": ["street", "properties.address.freeform"],
+    "city": ["city", "properties.address.locality"],
+    "state": ["state", "properties.address.region"],
+    "zip": ["zip", "properties.address.postcode"],
+    "vertical": ["vertical", "properties.primary_category"],
+    "naics": "naics"
+  }
+}

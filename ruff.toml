@@ -1,0 +1,8 @@
+# Release check: ruff check .  (pyflakes + the core pycodestyle errors; long lines are fine here)
+line-length = 130
+
+[lint]
+select = ["E4", "E7", "E9", "F"]
+
+[lint.per-file-ignores]
+"tests/*" = ["E731"]  # one-line fakes

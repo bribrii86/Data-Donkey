@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "data-donkey"
+dynamic = ["version"]
+description = "Shared SQLite store for acquired business data (city lists, UCC filings, Overture places)."
+requires-python = ">=3.11"
+dependencies = []  # standard library only
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff", "bandit", "pip-audit", "build"]
+
+[project.scripts]
+donkey = "donkey.ingest:main"
+
+[tool.setuptools]
+packages = ["donkey"]
+
+[tool.setuptools.dynamic]
+version = { attr = "donkey.__version__" }
+
+[tool.setuptools.package-data]
+donkey = ["schema.sql", "sources/*.json"]
