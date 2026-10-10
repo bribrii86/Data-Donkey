@@ -1,0 +1,22 @@
+{
+  "id": "city-business-list",
+  "name": "City business list",
+  "description": "Generic city-issued business license or permit list.",
+  "format": "csv",
+  "columns": {
+    "name": ["Business Name", "Name", "Business"],
+    "address": ["Address", "Business Address"],
+    "street": ["Street", "Street Address", "Address"],
+    "city": ["City", "Town"],
+    "state": ["State"],
+    "zip": ["ZIP", "Zip Code", "Postal Code"],
+    "license_number": ["License No", "License Number", "Permit Number"],
+    "open_date": ["Open Date", "Issue Date", "Start Date"],
+    "naics": ["NAICS", "NAICS Code"],
+    "vertical": ["Vertical", "Business Type"],
+    "contact_name": ["Contact Name", "Contact"],
+    "contact_title": ["Contact Title", "Title"],
+    "contact_email": ["Email", "Contact Email"],
+    "contact_phone": ["Phone", "Contact Phone"]
+  }
+}

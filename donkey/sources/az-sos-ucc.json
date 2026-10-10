@@ -1,0 +1,18 @@
+{
+  "id": "az-sos-ucc",
+  "name": "Arizona Secretary of State UCC filings",
+  "description": "Arizona UCC filing export in CSV format.",
+  "format": "csv",
+  "columns": {
+    "name": "Debtor",
+    "event_date": "Filing Date",
+    "filing_number": "File Number",
+    "secured_party": "Secured Party"
+  },
+  "event": {
+    "kind": "ucc_filing",
+    "date": "event_date",
+    "town": "city",
+    "details": ["filing_number", "secured_party"]
+  }
+}
