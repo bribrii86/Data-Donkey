@@ -15,15 +15,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from stephanie_assistant.prospects import _norm, _parse_date
+from .common import DEFAULT_DB, database_path
+from .common import norm as _norm
+from .common import parse_date as _parse_date
 
-ROOT = Path(__file__).resolve().parent.parent
 SOURCE_DIR = Path(__file__).resolve().parent / "sources"
-DEFAULT_DB = ROOT / "donkey.db"
-
-
-def database_path() -> Path:
-    return Path(os.environ.get("DONKEY_DB") or DEFAULT_DB).expanduser().resolve()
+__all__ = ["DEFAULT_DB", "connect", "database_path", "ingest", "ingest_overture", "load_source", "main"]
 
 
 def connect(path: str | Path | None = None) -> sqlite3.Connection:
@@ -242,8 +239,9 @@ def ingest_overture(
     db_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Copy history.db's overture_places table into Data Donkey once per distinct table contents."""
-    if history_db is None:
-        from stephanie_assistant.store import DEFAULT_DB as history_db
+    history_db = history_db or os.environ.get("STEPHANIE_DB")
+    if not history_db:
+        raise ValueError("no history database given; pass --history-db PATH or set STEPHANIE_DB")
     path = Path(history_db).expanduser()
     if not path.is_file():
         raise ValueError(f"history database not found: {path}")
@@ -268,7 +266,7 @@ def main(argv: list[str] | None = None) -> int:
     command.add_argument("--file", required=True, help="path to source file")
     command.add_argument("--received-from", required=True, help="person or organization who supplied the file")
     overture = commands.add_parser("ingest-overture", help="copy overture_places from the app's history.db")
-    overture.add_argument("--history-db", help="path to history.db (default: STEPHANIE_DB or repo root)")
+    overture.add_argument("--history-db", help="path to the app's history.db (default: STEPHANIE_DB)")
     overture.add_argument("--received-from", default="Stephanie app history.db")
     args = parser.parse_args(argv)
     try:

@@ -1,15 +1,18 @@
 # Data Donkey
 
 Data Donkey is the shared data store for acquired business lists, UCC filings,
-Overture places and leads. It is a standalone `donkey` Python package and SQLite
-database, separate from the Stephanie sales app.
+Overture places and leads. It is a standalone `donkey` Python package (standard
+library only) and SQLite database. Apps such as the Stephanie sales app
+(repo Sales-Pilot) install the package and read the database.
 
 ## Layout and database
 
 - `donkey/` contains the schema, ingestion CLI, read-only query API and source maps.
 - `donkey/sources/*.json` maps each source's input columns to common fields.
-- `donkey.db` lives at the repository root by default. Set `DONKEY_DB` to use a
-  different file. The database is ignored by Git.
+- `donkey.db` lives in the user's home folder by default (`~/DataDonkey/donkey.db`,
+  on Windows `C:\Users\NAME\DataDonkey\donkey.db`), so every app on the computer
+  reads the same file. Set `DONKEY_DB` to use a different file. Database files are
+  ignored by Git.
 - `samples/city-business-list.csv` is synthetic data for a city-list example.
 
 The SQLite schema has six tables:
@@ -22,8 +25,8 @@ The SQLite schema has six tables:
 - `contacts`: business contacts carried by imported source rows.
 
 Identical file contents (the same SHA-256) are only ingested once, even if the
-file name changes. Names are normalized with the Stephanie app's existing
-`prospects._norm`. A row is matched only when normalized names and ZIP or street
+file name changes. Names are normalized with `donkey.common.norm` (copied from the
+Stephanie app's `prospects._norm` at the v0.5.0 split; same results for ACP). A row is matched only when normalized names and ZIP or street
 agree. Ambiguous or insufficiently located same-name rows are retained in
 `records` with `match_status='needs_review'`; they are never auto-merged. Use
 `donkey.api.needs_review()` to retrieve that list.
@@ -57,17 +60,21 @@ CSV, JSON arrays, and JSONL inputs are supported. Existing maps include
 `az-sos-ucc` (creates `ucc_filing` events), `overture-places`, and the generic
 `city-business-list`.
 
-## The Stephanie app reads Data Donkey (v0.4.1)
+## Install
 
-The app gets UCC filings from `prospects.load_ucc_filings()`, in this order:
+```console
+pip install -e .            # from a checkout, for development
+pip install -e ".[dev]"     # plus pytest, ruff, bandit, pip-audit, build
+python -m build --wheel     # dist/data_donkey-VERSION-py3-none-any.whl for apps to ship
+```
 
-1. `STEPHANIE_FAKE_SOURCES=1`: `samples/pilot/ucc_fake.csv`, exactly as before.
-2. `donkey.db` (`DONKEY_DB`, else the repo root) when it has `ucc_filing` events: the debtor is the business
-   name, the secured party and filing number come from the event details, the filing date from `event_date`.
-3. Otherwise `data/ucc.csv` (or `STEPHANIE_UCC_CSV`) as before.
+Apps call `donkey.api` (read-only) and `donkey.api.database_path()` to find the file.
 
-A UCC file uploaded on the Prospects page, or an explicit path, still overrides all of this. With no `donkey.db`
-the app gives the same results as v0.4.0.
+## The Stephanie app reads Data Donkey
+
+Since app v0.4.1, `prospects.load_ucc_filings()` uses `ucc_filing` events from
+`donkey.db` when it has any, else the app's `data/ucc.csv`. Fake mode ignores Data
+Donkey. The app ships the Data Donkey wheel and installs it in `setup.bat`.
 
 ## Copy the app's Overture places
 
@@ -75,7 +82,8 @@ the app gives the same results as v0.4.0.
 python -m donkey ingest-overture --history-db PATH
 ```
 
-Copies the `overture_places` table from `history.db` (default: `STEPHANIE_DB`, else the repo root) into the
+Copies the `overture_places` table from the app's `history.db` (default: `STEPHANIE_DB`; with neither, the
+command stops and asks for `--history-db`) into the
 `overture-history-db` source. The batch records the sha256 of the table contents; the same contents are never
 ingested twice, and every row is kept in `records` as JSON.
 

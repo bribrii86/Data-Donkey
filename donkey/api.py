@@ -2,18 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 from typing import Iterable
 
-from stephanie_assistant.prospects import _norm
+from .common import DEFAULT_DB, database_path
+from .common import norm as _norm
 
-DEFAULT_DB = Path(__file__).resolve().parent.parent / "donkey.db"
+__all__ = ["DEFAULT_DB", "database_path", "events", "lookup", "needs_review", "search"]
 
 
 def _read_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
-    path = Path(db_path or os.environ.get("DONKEY_DB") or DEFAULT_DB).expanduser().resolve()
+    path = database_path(db_path)
     con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     return con
