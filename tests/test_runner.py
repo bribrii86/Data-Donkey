@@ -201,7 +201,8 @@ def test_task_command_and_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("DONKEY_HOME", str(tmp_path))
     assert main(["growth-weekly", "--dry-run", "--town", "Eloy"]) == 0
     out = capsys.readouterr().out
-    assert "town: Eloy (stephanie)" in out and "this run's cap: $6.00" in out
+    assert "job: Eloy (stephanie)" in out and "this run's cap: $6.00" in out
+    assert "job: Pinal notices (stephanie)" in out and "this run's cap: $1.50" in out
     assert main(["growth-weekly", "--install-task", "--dry-run", "--day", "MON"]) == 0
     assert "Would run: schtasks /Create /F /SC WEEKLY /D MON" in capsys.readouterr().out
     monkeypatch.setenv("DONKEY_RUN_AREA", "nowhere")

@@ -1,7 +1,7 @@
 """Call this week: one ranked list per area from every trigger Data Donkey holds, for the Monday list.
 
-Sources today: growth_* events (snapshot diffs) and ucc_filing events (new financing, and copier leases nearing their
-estimated end). Apps add their own triggers (permits, new licenses) by passing scorer functions, so nothing here has
+Sources today: growth_* events (snapshot diffs), ucc_filing events (new financing, and copier leases nearing their
+estimated end), sba_loan events and new_llc events (Pinal County formation notices). Apps add their own triggers (permits, new licenses) by passing scorer functions, so nothing here has
 to change when a new source arrives."""
 
 from __future__ import annotations
@@ -27,9 +27,16 @@ SCORES = {
     "ucc_new_other": 1,
     "ucc_lease_ending": 5,  # copier lessor filing whose estimated lease end is within LEASE_LEAD_DAYS
     "sba_loan": 3,  # SBA 7(a)/504 loan approved within SBA_LOOKBACK_DAYS: financing to grow or buy a business
+    "new_llc": 3,  # new LLC or corporation formed within NEW_LLC_LOOKBACK_DAYS: setting up an office now
 }
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
+NEW_LLC_LOOKBACK_DAYS = 60  # the notice runs up to 60 days after approval, so the formation date is already weeks old
+# LLCs named after a street address ("408 N. Sacaton Street LLC") or called holdings are usually a building's owner,
+# not a business that will set up an office; they stay in the store but don't score.
+_HOLDING = re.compile(
+    r"^\s*\d+\s+.*\b(st|street|rd|road|ave|avenue|hwy|highway|ln|lane|dr|drive|blvd|boulevard|way|pkwy|parkway|ct|"
+    r"court|pl|place|cir|circle|trl|trail)\b|\bholdings?\b", re.IGNORECASE)
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -43,6 +50,7 @@ REASONS = {
     "ucc_new_other": "new UCC filing",
     "ucc_lease_ending": "copier lease likely ending",
     "sba_loan": "SBA loan approved",
+    "new_llc": "new business formed (formation notice)",
 }
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
@@ -131,6 +139,26 @@ def _sba_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
                "amount": details.get("amount", ""), "lender": details.get("lender", "")}
 
 
+def looks_like_holding(name: str) -> bool:
+    return bool(_HOLDING.search(name or ""))
+
+
+def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+    start = (as_of - timedelta(days=NEW_LLC_LOOKBACK_DAYS)).isoformat()
+    rows = con.execute(
+        "SELECT * FROM events WHERE kind = 'new_llc' AND event_date >= ? AND event_date <= ?",
+        (start, as_of.isoformat()),
+    )
+    for row in rows:
+        details = json.loads(row["details_json"])
+        name, zip_code = details.get("name", ""), details.get("zip", "")
+        if looks_like_holding(name) or (area and not areas.contains(area, zip_code, row["town"] or "")):
+            continue
+        yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_llc"],
+               "signal": "new_llc", "date": row["event_date"], "agent": details.get("agent", ""),
+               "address_type": details.get("address_type", ""), "newspaper": details.get("newspaper", "")}
+
+
 def call_this_week(
     area: str | None = None,
     as_of: str | date | None = None,
@@ -141,7 +169,7 @@ def call_this_week(
 ) -> list[dict]:
     """Businesses to call this week in a named area (areas.json), highest score first. Points from all triggers in
     the last `days` days (lease-ending triggers count while the lease end is near; SBA loans for
-    SBA_LOOKBACK_DAYS) are added per business."""
+    SBA_LOOKBACK_DAYS, formation notices for NEW_LLC_LOOKBACK_DAYS) are added per business."""
     today = as_of if isinstance(as_of, date) else (parse_date(as_of) if as_of else date.today())
     if today is None:
         raise ValueError(f"bad as_of date {as_of!r}")
@@ -150,7 +178,7 @@ def call_this_week(
     con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, *scorers) for hit in scorer(con, area_def, today, since)]
+        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, _new_llc_hits, *scorers) for hit in scorer(con, area_def, today, since)]
     finally:
         con.close()
     totals: dict[str, dict] = {}

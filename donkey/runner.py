@@ -1,5 +1,6 @@
 """Weekly growth runner: ask Buck's Console research agent (Managed Agents) to list one town's businesses, save the
-CSV pages it writes, then snapshot and diff them so growth events reach call-this-week.
+CSV pages it writes, then snapshot and diff them so growth events reach call-this-week. A second job reads the week's
+Pinal County formation notices (new LLCs and corporations must run one in a county newspaper) into new_llc events.
 
 Paid calls, so every run is capped twice: a monthly cap kept in donkey.db (agent_runs) and a hard per-session
 budget the platform enforces. The API key comes from the environment or a gitignored .env, never from the repo.
@@ -19,15 +20,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from . import areas, growth
 from .common import DEFAULT_DB
-from .ingest import connect
+from .ingest import connect, ingest
 
-__all__ = ["ConsoleClient", "Settings", "load_settings", "pick_town", "run_weekly", "month_spend", "task_command"]
+__all__ = ["ConsoleClient", "Settings", "load_settings", "pick_town", "run_weekly", "run_notices", "month_spend",
+           "task_command"]
 
 API = "https://api.anthropic.com"
 BETA = "managed-agents-2026-04-01"
@@ -35,6 +37,10 @@ HOME = DEFAULT_DB.parent  # ~/DataDonkey: .env, runs/, logs/
 COLUMNS = ("name", "street", "city", "zip", "phone", "website", "category", "home_based", "source_url", "date_seen")
 MIN_RUN_CENTS = 100  # don't start a run with less than $1 left this month
 TASK_NAME = "DataDonkey Growth Weekly"
+NOTICES_LABEL = "Pinal notices"  # agent_runs.town for the notices job; not a town, so the rotation never picks it
+NOTICE_COLUMNS = ("name", "street", "city", "zip", "address_type", "agent", "entity_id", "entity_type",
+                  "effective_date", "newspaper", "source_url", "date_seen")
+NOTICES_DAYS = 10  # weekly job, so a few days of overlap; repeats are dropped by entity ID
 
 PROMPT = """List every business you can find that is physically located in {town}, Arizona (all categories, including
 home-based businesses and trades; do not skip home businesses). Use free and paid web directories and business listing
@@ -48,6 +54,31 @@ Save results as you go: after each directory page, write that page's rows to /mn
 - date_seen: {today}. source_url: the page the row came from.
 - One row per business; leave a field blank rather than guessing. Skip businesses outside {town}.
 Stop when the directories run out. Reply with one line: pages saved and rows written."""
+
+NOTICES_PROMPT = """Find every notice of formation (Articles of Organization for an LLC, Articles of Incorporation for a
+corporation) for a Pinal County, Arizona business published in the last {days} days (on or after {since}). Arizona
+requires these notices in a newspaper of the county of the statutory agent or known place of business, so new Pinal
+businesses appear there and not in the Corporation Commission's Maricopa and Pima public notice list.
+
+Look in, in this order:
+1. https://www.arizonapublicnotices.com/ with the Pinal County filter.
+2. The Column notice sites of Casa Grande Valley Newspapers: https://casagrandedispatch.column.us/search and
+   https://pinalcentraldispatch.column.us/search (Casa Grande Dispatch, PinalCentral Dispatch, Tri-Valley Dispatch,
+   Coolidge Examiner, Florence Reminder and Blade-Tribune, Arizona City Independent, Eloy Enterprise).
+3. Any other newspaper running Pinal County legal notices: Florence Independent, the Copper Area News papers
+   (Superior Sun, Copper Basin News, San Manuel Miner, Pinal Nugget), and statewide papers that accept Pinal notices.
+
+Save rows as you go, one file per source: /mnt/session/outputs/pinal-notices-NN.csv (NN = 01, 02, ...). CSV columns,
+in this order:
+{columns}
+- street, city, zip: the known place of business when the notice gives one (address_type=business), else the
+  statutory agent's address (address_type=agent).
+- agent: statutory agent name. entity_id: the Commission's entity or file number. entity_type: LLC or corporation.
+- effective_date: the formation or effective date in the notice, YYYY-MM-DD. date_seen: {today}.
+- newspaper: the paper's name. source_url: the page the notice came from.
+- One row per business. Leave a field blank rather than guessing, and never invent a row. Keep every Pinal County
+  notice, whatever the town.
+If a site refuses you, move on. Reply with one line: sources checked, sources refused, rows written."""
 
 
 class Client(Protocol):
@@ -141,7 +172,8 @@ class ConsoleClient:
 
 
 class Settings(dict):
-    """agent_id, environment_id, api_key, monthly_cap_cents, run_cap_cents, area, timeout_minutes, home."""
+    """agent_id, environment_id, api_key, monthly_cap_cents, run_cap_cents, notices_cap_cents, area, timeout_minutes,
+    home."""
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -176,6 +208,7 @@ def load_settings(env: dict[str, str] | None = None, home: Path | None = None) -
         environment_id=merged.get("DONKEY_ENVIRONMENT_ID", ""),
         monthly_cap_cents=_cents(merged.get("DONKEY_MONTHLY_CAP_USD", "25"), "DONKEY_MONTHLY_CAP_USD"),
         run_cap_cents=_cents(merged.get("DONKEY_RUN_CAP_USD", "6"), "DONKEY_RUN_CAP_USD"),
+        notices_cap_cents=_cents(merged.get("DONKEY_NOTICES_CAP_USD", "1.50"), "DONKEY_NOTICES_CAP_USD"),
         area=merged.get("DONKEY_RUN_AREA", "stephanie"),
         timeout_minutes=int(merged.get("DONKEY_RUN_TIMEOUT_MINUTES", "90")),
         home=home,
@@ -257,19 +290,99 @@ def _wait(client: Client, session_id: str, timeout_s: float, poll_s: float, slee
     return "timeout"
 
 
-def _merge_csvs(blobs: list[tuple[str, bytes]], out: Path) -> int:
+def _read_csvs(blobs: list[tuple[str, bytes]], columns: tuple[str, ...]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for _, blob in sorted(blobs):
         for row in csv.DictReader(io.StringIO(blob.decode("utf-8-sig", "replace"))):
             lower = {str(k).strip().casefold(): (v or "").strip() for k, v in row.items() if k}
             if lower.get("name"):
-                rows.append({column: lower.get(column, "") for column in COLUMNS})
+                rows.append({column: lower.get(column, "") for column in columns})
+    return rows
+
+
+def _write_csv(rows: list[dict[str, str]], out: Path, columns: tuple[str, ...]) -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     with out.open("w", encoding="utf8", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=COLUMNS)
+        writer = csv.DictWriter(stream, fieldnames=columns)
         writer.writeheader()
         writer.writerows(rows)
     return len(rows)
+
+
+def _merge_csvs(blobs: list[tuple[str, bytes]], out: Path) -> int:
+    return _write_csv(_read_csvs(blobs, COLUMNS), out, COLUMNS)
+
+
+Finish = Callable[[list[tuple[str, bytes]], str], dict[str, Any]]
+
+
+def _agent_job(
+    settings: Settings,
+    client: Client | None,
+    label: str,
+    title: str,
+    prompt: str,
+    cap_cents: int,
+    finish: Finish,
+    dry_run: bool,
+    db_path: str | Path | None,
+    poll_seconds: float,
+    sleep: Callable[[float], None],
+    con: sqlite3.Connection,
+    result: dict[str, Any],
+) -> dict[str, Any]:
+    """One capped agent session. The caller has opened `con` with BEGIN IMMEDIATE: the month's spend is read and this
+    run's budget claimed in that one write transaction, so two runs started together can't both see the same money
+    left. Closing without commit (dry run, missing settings) rolls it back. `finish(csv_blobs, day)` stores the rows
+    and returns what to record (files, rows, snapshot_id, changes) plus anything else to report."""
+    area = settings["area"]
+    spent = month_spend(con)
+    budget = min(cap_cents, settings["monthly_cap_cents"] - spent)
+    result = {**result, "area": area, "month_spent_cents": spent, "budget_cents": budget}
+    if dry_run:
+        return {**result, "status": "dry_run", "prompt": prompt}
+    if budget < MIN_RUN_CENTS:
+        con.execute("INSERT INTO agent_runs (started_at, finished_at, area, town, status, budget_cents, cost_cents, "
+                    "note) VALUES (?, ?, ?, ?, 'skipped_cap', 0, 0, ?)",
+                    (_now(), _now(), area, label, f"monthly cap reached: {spent} of "
+                                                  f"{settings['monthly_cap_cents']} cents"))
+        con.commit()
+        return {**result, "status": "skipped_cap"}
+    for field in ("agent_id", "environment_id"):
+        if not settings[field]:
+            raise ValueError(f"DONKEY_{field.upper()} is not set (environment or ~/DataDonkey/.env)")
+    if client is None:
+        client = ConsoleClient(settings["api_key"], settings["home"] / "logs" / "console-calls.jsonl")
+    run_id = int(con.execute(
+        "INSERT INTO agent_runs (started_at, area, town, status, budget_cents) VALUES (?, ?, ?, 'starting', ?)",
+        (_now(), area, label, budget)).lastrowid)
+    con.commit()
+
+    def update(**fields: Any) -> None:
+        sets = ", ".join(f"{name} = ?" for name in fields)
+        con.execute(f"UPDATE agent_runs SET {sets} WHERE id = ?", (*fields.values(), run_id))  # nosec B608
+        con.commit()
+
+    session_id = None
+    try:
+        session = client.create_session(settings["agent_id"], settings["environment_id"], budget, title)
+        session_id = session["id"]
+        update(session_id=session_id, status="running")
+        client.send_message(session_id, prompt)
+        status = _wait(client, session_id, settings["timeout_minutes"] * 60, poll_seconds, sleep)
+        usage = client.get_session(session_id).get("usage") or {}
+        cost = int((usage.get("list_cost") or {}).get("amount") or budget)
+        update(status=status, cost_cents=cost)
+        blobs = [(f.get("filename", ""), client.download(f["id"])) for f in client.list_files(session_id)
+                 if str(f.get("filename", "")).casefold().endswith(".csv")]
+        done = finish(blobs, datetime.now(timezone.utc).date().isoformat())
+        update(finished_at=_now(), files=len(blobs), rows=done["rows"], snapshot_id=done.get("snapshot_id"),
+               changes=done.get("changes"))
+        return {**result, **done, "status": status, "session_id": session_id, "cost_cents": cost, "files": len(blobs)}
+    except Exception as exc:
+        # No session means nothing was spent; otherwise the cost stays unknown and counts at the full budget.
+        update(finished_at=_now(), status="error", note=str(exc)[:500], **({} if session_id else {"cost_cents": 0}))
+        raise
 
 
 def run_weekly(
@@ -281,58 +394,16 @@ def run_weekly(
     poll_seconds: float = 30,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """One scheduled run. Returns what happened; every outcome, including a skip, is a row in agent_runs."""
+    """One scheduled town run. Returns what happened; every outcome, including a skip, is a row in agent_runs."""
     area = settings["area"]
     con = connect(db_path)
     try:
-        # Read the month's spend and claim this run's budget in one write transaction, so two runs started together
-        # can't both see the same money left. Closing without commit (dry run, missing settings) rolls it back.
         con.execute("BEGIN IMMEDIATE")
         town = town or pick_town(con, area)
-        spent = month_spend(con)
-        left = settings["monthly_cap_cents"] - spent
-        budget = min(settings["run_cap_cents"], left)
         prompt = PROMPT.format(town=town, slug=_slug(town), columns=",".join(COLUMNS),
                                today=datetime.now(timezone.utc).date().isoformat())
-        result: dict[str, Any] = {"town": town, "area": area, "month_spent_cents": spent, "budget_cents": budget}
-        if dry_run:
-            return {**result, "status": "dry_run", "prompt": prompt}
-        if budget < MIN_RUN_CENTS:
-            con.execute("INSERT INTO agent_runs (started_at, finished_at, area, town, status, budget_cents, cost_cents, "
-                        "note) VALUES (?, ?, ?, ?, 'skipped_cap', 0, 0, ?)",
-                        (_now(), _now(), area, town, f"monthly cap reached: {spent} of "
-                                                     f"{settings['monthly_cap_cents']} cents"))
-            con.commit()
-            return {**result, "status": "skipped_cap"}
-        for field in ("agent_id", "environment_id"):
-            if not settings[field]:
-                raise ValueError(f"DONKEY_{field.upper()} is not set (environment or ~/DataDonkey/.env)")
-        if client is None:
-            client = ConsoleClient(settings["api_key"], settings["home"] / "logs" / "console-calls.jsonl")
-        run_id = int(con.execute(
-            "INSERT INTO agent_runs (started_at, area, town, status, budget_cents) VALUES (?, ?, ?, 'starting', ?)",
-            (_now(), area, town, budget)).lastrowid)
-        con.commit()
 
-        def update(**fields: Any) -> None:
-            sets = ", ".join(f"{name} = ?" for name in fields)
-            con.execute(f"UPDATE agent_runs SET {sets} WHERE id = ?", (*fields.values(), run_id))  # nosec B608
-            con.commit()
-
-        session_id = None
-        try:
-            session = client.create_session(settings["agent_id"], settings["environment_id"], budget,
-                                            f"Data Donkey weekly growth: {town}")
-            session_id = session["id"]
-            update(session_id=session_id, status="running")
-            client.send_message(session_id, prompt)
-            status = _wait(client, session_id, settings["timeout_minutes"] * 60, poll_seconds, sleep)
-            usage = client.get_session(session_id).get("usage") or {}
-            cost = int((usage.get("list_cost") or {}).get("amount") or budget)
-            update(status=status, cost_cents=cost)
-            blobs = [(f.get("filename", ""), client.download(f["id"])) for f in client.list_files(session_id)
-                     if str(f.get("filename", "")).casefold().endswith(".csv")]
-            day = datetime.now(timezone.utc).date().isoformat()
+        def finish(blobs: list[tuple[str, bytes]], day: str) -> dict[str, Any]:
             out = settings["home"] / "runs" / f"{day}-{_slug(town)}" / f"{_slug(town)}.csv"
             rows = _merge_csvs(blobs, out)
             snapshot = diff = None
@@ -340,15 +411,70 @@ def run_weekly(
                 snapshot = growth.take_snapshot(out, f"weekly {town}", day, db_path=db_path, area=area)
                 if not snapshot["duplicate"]:
                     diff = growth.diff_snapshots(new_id=snapshot["snapshot_id"], db_path=db_path)
-            update(finished_at=_now(), files=len(blobs), rows=rows,
-                   snapshot_id=snapshot and snapshot["snapshot_id"], changes=diff and diff["changes"])
-            return {**result, "status": status, "session_id": session_id, "cost_cents": cost, "files": len(blobs),
-                    "rows": rows, "csv": str(out), "snapshot": snapshot, "diff": diff}
-        except Exception as exc:
-            # No session means nothing was spent; otherwise the cost stays unknown and counts at the full budget.
-            update(finished_at=_now(), status="error", note=str(exc)[:500],
-                   **({} if session_id else {"cost_cents": 0}))
-            raise
+            return {"rows": rows, "csv": str(out), "snapshot": snapshot, "diff": diff,
+                    "snapshot_id": snapshot and snapshot["snapshot_id"], "changes": diff and diff["changes"]}
+
+        return _agent_job(settings, client, town, f"Data Donkey weekly growth: {town}", prompt,
+                          settings["run_cap_cents"], finish, dry_run, db_path, poll_seconds, sleep, con,
+                          {"town": town})
+    finally:
+        con.close()
+
+
+def _seen_entities(db_path: str | Path | None) -> set[str]:
+    """Entity IDs (else names) of formation notices already stored, so a notice seen two weeks running counts once."""
+    con = connect(db_path)
+    try:
+        seen = set()
+        for row in con.execute("SELECT details_json FROM events WHERE kind = 'new_llc'"):
+            details = json.loads(row["details_json"])
+            seen.add(_entity_key(details.get("entity_id", ""), details.get("name", "")))
+        return seen
+    finally:
+        con.close()
+
+
+def _entity_key(entity_id: str, name: str) -> str:
+    digits = re.sub(r"[^0-9a-z]", "", (entity_id or "").casefold())
+    return f"id:{digits}" if digits else f"name:{re.sub(r'[^0-9a-z]', '', (name or '').casefold())}"
+
+
+def run_notices(
+    settings: Settings,
+    client: Client | None = None,
+    dry_run: bool = False,
+    db_path: str | Path | None = None,
+    poll_seconds: float = 30,
+    sleep: Callable[[float], None] = time.sleep,
+) -> dict[str, Any]:
+    """The week's Pinal County formation notices (new LLCs and corporations) into new_llc events. Same monthly cap as
+    the town runs; its own per-run cap (DONKEY_NOTICES_CAP_USD, default $1.50)."""
+    today = datetime.now(timezone.utc).date()
+    since = (today - timedelta(days=NOTICES_DAYS)).isoformat()
+    prompt = NOTICES_PROMPT.format(days=NOTICES_DAYS, since=since, columns=",".join(NOTICE_COLUMNS),
+                                   today=today.isoformat())
+
+    def finish(blobs: list[tuple[str, bytes]], day: str) -> dict[str, Any]:
+        seen = _seen_entities(db_path)
+        rows = []
+        for row in _read_csvs(blobs, NOTICE_COLUMNS):
+            key = _entity_key(row["entity_id"], row["name"])
+            if key in seen:
+                continue
+            seen.add(key)
+            row["effective_date"] = row["effective_date"] or row["date_seen"] or day
+            rows.append(row)
+        out = settings["home"] / "runs" / f"{day}-pinal-notices" / "pinal-notices.csv"
+        _write_csv(rows, out, NOTICE_COLUMNS)
+        stored = ingest("pinal-notices", out, "Console agent: weekly Pinal notices", db_path) if rows else None
+        return {"rows": len(rows), "csv": str(out), "ingest": stored}
+
+    con = connect(db_path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        return _agent_job(settings, client, NOTICES_LABEL, "Data Donkey weekly Pinal formation notices", prompt,
+                          settings["notices_cap_cents"], finish, dry_run, db_path, poll_seconds, sleep, con,
+                          {"town": NOTICES_LABEL})
     finally:
         con.close()
 

@@ -1,0 +1,26 @@
+{
+  "id": "pinal-notices",
+  "name": "Pinal County formation notices",
+  "description": "Notices of formation (new LLCs and corporations) published in Pinal County newspapers, collected weekly by the Console agent. Arizona requires the notice in a newspaper of the county of the statutory agent or known place of business (A.R.S. 29-3201, 10-203), so Pinal businesses appear here, not in the Corporation Commission's Maricopa and Pima list. The address is the business's when the notice gives one, else the statutory agent's (address_type).",
+  "format": "csv",
+  "required": ["name", "event_date"],
+  "columns": {
+    "name": ["name"],
+    "street": ["street"],
+    "city": ["city"],
+    "zip": ["zip"],
+    "address_type": ["address_type"],
+    "agent": ["agent"],
+    "entity_id": ["entity_id"],
+    "entity_type": ["entity_type"],
+    "event_date": ["effective_date"],
+    "newspaper": ["newspaper"],
+    "source_url": ["source_url"]
+  },
+  "event": {
+    "kind": "new_llc",
+    "date": "event_date",
+    "town": "city",
+    "details": ["name", "zip", "street", "address_type", "agent", "entity_id", "entity_type", "newspaper", "source_url"]
+  }
+}

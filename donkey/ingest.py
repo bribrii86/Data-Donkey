@@ -298,6 +298,21 @@ def _overture_line(result: dict[str, Any]) -> str:
     return f"Overture {result['release']} ({result['area']}): {result['rows']} places; {change}"
 
 
+def _print_weekly(result: dict[str, Any]) -> None:
+    if result["status"] == "dry_run":
+        print(f"job: {result['town']} ({result['area']}); this month: ${result['month_spent_cents'] / 100:.2f} "
+              f"spent; this run's cap: ${result['budget_cents'] / 100:.2f}\n\n{result['prompt']}\n")
+    elif result["status"] == "skipped_cap":
+        print(f"Skipped {result['town']}: monthly cap reached (${result['month_spent_cents'] / 100:.2f} spent).")
+    elif "diff" in result:
+        diff = result.get("diff") or {}
+        print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} rows "
+              f"from {result['files']} files, {diff.get('changes', 0)} growth changes. CSV: {result['csv']}")
+    else:
+        print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} new "
+              f"formation notices from {result['files']} files. CSV: {result['csv']}")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m donkey")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -328,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     weekly.add_argument("--install-task", action="store_true", help="register the weekly Windows scheduled task")
     weekly.add_argument("--day", default="SUN", help="task day, MON to SUN (default SUN)")
     weekly.add_argument("--time", default="03:00", help="task time, HH:MM 24-hour (default 03:00)")
+    weekly.add_argument("--no-notices", action="store_true", help="skip the Pinal formation notices job")
+    weekly.add_argument("--notices-only", action="store_true", help="run only the Pinal formation notices job")
     ovt = commands.add_parser("overture-snapshot", help="free: store Overture releases for an area and diff them")
     ovt.add_argument("--area", default="stephanie", help="area from areas.json (needs a bbox)")
     ovt.add_argument("--release", help="one release, e.g. 2026-09-23.0 (default: every release not yet stored)")
@@ -361,20 +378,19 @@ def main(argv: list[str] | None = None) -> int:
                         print(_overture_line(done))
                 except Exception as exc:  # noqa: BLE001 - optional (DuckDB, network); the paid run still goes
                     print(f"Overture check skipped: {exc}", file=sys.stderr)
-            result = runner.run_weekly(settings, town=args.town, dry_run=args.dry_run)
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             print(f"growth-weekly failed: {exc}", file=sys.stderr)
             return 1
-        if result["status"] == "dry_run":
-            print(f"town: {result['town']} ({result['area']}); this month: ${result['month_spent_cents'] / 100:.2f} "
-                  f"spent; this run's cap: ${result['budget_cents'] / 100:.2f}\n\n{result['prompt']}")
-        elif result["status"] == "skipped_cap":
-            print(f"Skipped {result['town']}: monthly cap reached (${result['month_spent_cents'] / 100:.2f} spent).")
-        else:
-            diff = result.get("diff") or {}
-            print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} rows "
-                  f"from {result['files']} files, {diff.get('changes', 0)} growth changes. CSV: {result['csv']}")
-        return 0
+        jobs = ([] if args.notices_only else [lambda: runner.run_weekly(settings, town=args.town, dry_run=args.dry_run)])
+        jobs += [] if args.no_notices else [lambda: runner.run_notices(settings, dry_run=args.dry_run)]
+        failed = 0
+        for job in jobs:  # one job failing never stops the other
+            try:
+                _print_weekly(job())
+            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+                print(f"growth-weekly failed: {exc}", file=sys.stderr)
+                failed = 1
+        return failed
     if args.command == "call-this-week":
         from .triggers import call_this_week
 
