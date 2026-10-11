@@ -61,12 +61,15 @@ requires these notices in a newspaper of the county of the statutory agent or kn
 businesses appear there and not in the Corporation Commission's Maricopa and Pima public notice list.
 
 Look in, in this order:
-1. https://www.arizonapublicnotices.com/ with the Pinal County filter.
+1. https://www.arizonapublicnotices.com/ with the Pinal County filter. Also search it by publication for each paper
+   in step 3, since a notice may be filed under the paper rather than the county.
 2. The Column notice sites of Casa Grande Valley Newspapers: https://casagrandedispatch.column.us/search and
-   https://pinalcentraldispatch.column.us/search (Casa Grande Dispatch, PinalCentral Dispatch, Tri-Valley Dispatch,
-   Coolidge Examiner, Florence Reminder and Blade-Tribune, Arizona City Independent, Eloy Enterprise).
-3. Any other newspaper running Pinal County legal notices: Florence Independent, the Copper Area News papers
-   (Superior Sun, Copper Basin News, San Manuel Miner, Pinal Nugget), and statewide papers that accept Pinal notices.
+   https://pinalcentraldispatch.column.us/search.
+3. Every newspaper the Corporation Commission approves for Pinal County notices (AZCC newspaper listing, rev 8/2026):
+   Casa Grande Dispatch (Casa Grande), Arizona Chinese American, also called Az Chinese News (Phoenix; approved for
+   Pinal, Maricopa and Pima, so check its Pinal notices), Copper Basin News (Kearny), San Manuel Miner (San Manuel)
+   and Superior Sun (Superior). Check each paper's own legal notices page too.
+4. Any other paper you find running Pinal County formation notices.
 
 Save rows as you go, one file per source: /mnt/session/outputs/pinal-notices-NN.csv (NN = 01, 02, ...). CSV columns,
 in this order:
@@ -341,7 +344,7 @@ def _agent_job(
     result = {**result, "area": area, "month_spent_cents": spent, "budget_cents": budget}
     if dry_run:
         return {**result, "status": "dry_run", "prompt": prompt}
-    if budget < MIN_RUN_CENTS:
+    if budget < max(1, min(MIN_RUN_CENTS, cap_cents)):  # a job capped under $1 still runs when its cap is left
         con.execute("INSERT INTO agent_runs (started_at, finished_at, area, town, status, budget_cents, cost_cents, "
                     "note) VALUES (?, ?, ?, ?, 'skipped_cap', 0, 0, ?)",
                     (_now(), _now(), area, label, f"monthly cap reached: {spent} of "

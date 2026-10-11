@@ -28,15 +28,18 @@ SCORES = {
     "ucc_lease_ending": 5,  # copier lessor filing whose estimated lease end is within LEASE_LEAD_DAYS
     "sba_loan": 3,  # SBA 7(a)/504 loan approved within SBA_LOOKBACK_DAYS: financing to grow or buy a business
     "new_llc": 3,  # new LLC or corporation formed within NEW_LLC_LOOKBACK_DAYS: setting up an office now
+    "new_llc_agent": 3,  # same, but the notice only gives the statutory agent's address (often a lawyer's office)
 }
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
 NEW_LLC_LOOKBACK_DAYS = 60  # the notice runs up to 60 days after approval, so the formation date is already weeks old
 # LLCs named after a street address ("408 N. Sacaton Street LLC") or called holdings are usually a building's owner,
 # not a business that will set up an office; they stay in the store but don't score.
+# The street word must end the name (bar the entity suffix), so "2 Brothers Way Trucking LLC" still scores.
 _HOLDING = re.compile(
-    r"^\s*\d+\s+.*\b(st|street|rd|road|ave|avenue|hwy|highway|ln|lane|dr|drive|blvd|boulevard|way|pkwy|parkway|ct|"
-    r"court|pl|place|cir|circle|trl|trail)\b|\bholdings?\b", re.IGNORECASE)
+    r"^\s*\d+\s+(\S+\s+){0,4}(st|street|rd|road|ave|avenue|hwy|highway|ln|lane|dr|drive|blvd|boulevard|way|pkwy|"
+    r"parkway|ct|court|pl|place|cir|circle|trl|trail)\.?,?(\s+(llc|l\.l\.c\.|inc|corp|co|lp|llp)\.?)?\s*$"
+    r"|\bholdings?\b", re.IGNORECASE)
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -51,6 +54,7 @@ REASONS = {
     "ucc_lease_ending": "copier lease likely ending",
     "sba_loan": "SBA loan approved",
     "new_llc": "new business formed (formation notice)",
+    "new_llc_agent": "new business formed (formation notice; address is the statutory agent's, look it up first)",
 }
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
@@ -154,8 +158,9 @@ def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
         name, zip_code = details.get("name", ""), details.get("zip", "")
         if looks_like_holding(name) or (area and not areas.contains(area, zip_code, row["town"] or "")):
             continue
-        yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_llc"],
-               "signal": "new_llc", "date": row["event_date"], "agent": details.get("agent", ""),
+        signal = "new_llc_agent" if details.get("address_type", "").strip().lower() == "agent" else "new_llc"
+        yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES[signal],
+               "signal": signal, "date": row["event_date"], "agent": details.get("agent", ""),
                "address_type": details.get("address_type", ""), "newspaper": details.get("newspaper", "")}
 
 
