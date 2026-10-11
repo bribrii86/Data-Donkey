@@ -206,3 +206,26 @@ are stored (`keep` in the source map); the rest are counted as "left out". Each 
 lender, industry, jobs, business age). `call-this-week` gives 3 points to a loan approved in the last 180 days; older
 loans stay as history (who borrowed, when, how much). Column names follow the 2020s file layout; ingest lists any it
 can't find.
+
+## Pinal formation notices (v0.5.5, paid, part of the weekly run)
+
+Arizona requires a new LLC or corporation to publish a notice of formation in a newspaper of the county of its
+statutory agent or known place of business (A.R.S. 29-3201, 10-203). Only Maricopa and Pima filers are posted on the
+Corporation Commission's public notice list, so new Pinal businesses show up only in Pinal newspapers. That notice is
+usually the earliest public sign of a new business, weeks before a permit or a directory listing.
+
+`growth-weekly` now runs a second agent session after the town run: it reads the last 10 days of Pinal formation
+notices (arizonapublicnotices.com with the Pinal filter, the Casa Grande Valley Newspapers Column sites, then other
+Pinal papers) and saves `pinal-notices-NN.csv`. Rows already stored (same entity ID, else same name) are dropped, the
+rest go to `~/DataDonkey/runs/DATE-pinal-notices/pinal-notices.csv` and are ingested with source map `pinal-notices`
+as `new_llc` events. The address is the business's when the notice gives one, else the statutory agent's
+(`address_type`).
+
+`call-this-week` gives 3 points to a new LLC or corporation formed in the last 60 days. LLCs named after a street
+address ("408 N. Sacaton Street LLC") or called holdings are kept in the store but don't score: they are usually a
+building's owner. Notices outside the area (by ZIP or town) don't score either.
+
+Cost: its own per-run cap `DONKEY_NOTICES_CAP_USD` (default $1.50) inside the same monthly cap. A failure in one job
+never stops the other. `--no-notices` skips it; `--notices-only` runs only it; `--dry-run` prints both prompts.
+Known gap: a Pinal business whose statutory agent is in Maricopa or Pima publishes there (no address on that list),
+so it is missed here.

@@ -5,7 +5,13 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-10)
+## Current state (2026-10-11)
+- v0.5.5: Pinal formation notices. `growth-weekly` now also runs a second agent session (own $1.50 cap, same $25 month)
+  that reads the last 10 days of Pinal County new-LLC/corporation notices (Arizona requires them in a county paper;
+  the ACC public notice list only has Maricopa and Pima) into `new_llc` events (source map `pinal-notices`, repeats
+  dropped by entity ID). call-this-week: 3 points for 60 days; address-named or "holdings" LLCs don't score.
+  `--no-notices`, `--notices-only`. Runner live on Buck's PC since 2026-10-11 00:47 UTC (Sundays 03:00); first real
+  run 2026-10-11 10:00 UTC.
 - v0.5.4: history sources. `python -m donkey overture-snapshot` stores each Overture release for an area (bbox now in
   areas.json) as snapshot "overture AREA" dated by the release and diffs it; S3 keeps only the latest releases
   (2026-08-19 and 2026-09-23 on 2026-10-10), so history builds from here. growth-weekly runs it first (free).
