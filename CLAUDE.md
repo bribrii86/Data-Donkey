@@ -6,6 +6,12 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-11)
+- v0.5.6: PR #5 review fixes and the full AZCC Pinal paper list. Notices prompt now checks every paper the Commission
+  approves for Pinal (Casa Grande Dispatch, Arizona Chinese American / Az Chinese News of Phoenix, Copper Basin News,
+  San Manuel Miner, Superior Sun). Notices that give only the statutory agent's address score 3 as `new_llc_agent`
+  with a "look it up first" reason. Holding-name filter only matches names that end in the street word ("2 Brothers
+  Way Trucking LLC" scores). growth-weekly catches any error per job. DONKEY_NOTICES_CAP_USD under $1 now runs.
+  PR #5 merged 2026-10-11 06:25 UTC at f4dfc3c (main 59e796b).
 - v0.5.5: Pinal formation notices. `growth-weekly` now also runs a second agent session (own $1.50 cap, same $25 month)
   that reads the last 10 days of Pinal County new-LLC/corporation notices (Arizona requires them in a county paper;
   the ACC public notice list only has Maricopa and Pima) into `new_llc` events (source map `pinal-notices`, repeats

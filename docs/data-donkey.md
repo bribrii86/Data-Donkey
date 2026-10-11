@@ -215,17 +215,22 @@ Corporation Commission's public notice list, so new Pinal businesses show up onl
 usually the earliest public sign of a new business, weeks before a permit or a directory listing.
 
 `growth-weekly` now runs a second agent session after the town run: it reads the last 10 days of Pinal formation
-notices (arizonapublicnotices.com with the Pinal filter, the Casa Grande Valley Newspapers Column sites, then other
-Pinal papers) and saves `pinal-notices-NN.csv`. Rows already stored (same entity ID, else same name) are dropped, the
+notices (arizonapublicnotices.com with the Pinal filter, the Casa Grande Valley Newspapers Column sites, then every
+paper the Corporation Commission approves for Pinal notices: Casa Grande Dispatch, Arizona Chinese American / Az
+Chinese News (a Phoenix paper also approved for Pinal), Copper Basin News, San Manuel Miner and Superior Sun) and saves `pinal-notices-NN.csv`. Rows already stored (same entity ID, else same name) are dropped, the
 rest go to `~/DataDonkey/runs/DATE-pinal-notices/pinal-notices.csv` and are ingested with source map `pinal-notices`
 as `new_llc` events. The address is the business's when the notice gives one, else the statutory agent's
 (`address_type`).
 
 `call-this-week` gives 3 points to a new LLC or corporation formed in the last 60 days. LLCs named after a street
 address ("408 N. Sacaton Street LLC") or called holdings are kept in the store but don't score: they are usually a
-building's owner. Notices outside the area (by ZIP or town) don't score either.
+building's owner (the name must end with the street word, so "2 Brothers Way Trucking LLC" still scores). Notices
+outside the area (by ZIP or town) don't score either. When the notice gives only the statutory agent's address
+(often a lawyer's office), the row still scores 3 but its reason says the address is the agent's, so look the
+business up before calling (v0.5.6).
 
-Cost: its own per-run cap `DONKEY_NOTICES_CAP_USD` (default $1.50) inside the same monthly cap. A failure in one job
+Cost: its own per-run cap `DONKEY_NOTICES_CAP_USD` (default $1.50; a cap under $1 also works) inside the same
+monthly cap. A failure in one job
 never stops the other. `--no-notices` skips it; `--notices-only` runs only it; `--dry-run` prints both prompts.
 Known gap: a Pinal business whose statutory agent is in Maricopa or Pima publishes there (no address on that list),
 so it is missed here.

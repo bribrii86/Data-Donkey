@@ -46,7 +46,9 @@ def test_notices_become_new_llc_events_once_and_reach_call_this_week(tmp_path):
     # holding LLC named after its address doesn't score; Gold Canyon is outside Stephanie's territory;
     # a blank effective date falls back to the day it was seen
     assert names == ["Gudelia LLC", "Pathmaker Strategies LLC"]
-    assert {h["reasons"][0] for h in hits} == {"new business formed (formation notice)"}
+    # both notices give only the statutory agent's address, so the reason says to look the business up first
+    assert {h["signals"][0] for h in hits} == {"new_llc_agent"}
+    assert all("statutory agent's" in h["reasons"][0] and h["score"] == 3 for h in hits)
 
     again = _notices(tmp_path, FakeClient({"pinal-notices-01.csv": NOTICES}, cost="80"))
     assert again["rows"] == 0 and again["ingest"] is None  # same notices next week are not stored twice
@@ -68,7 +70,10 @@ def test_old_notices_drop_off_and_rotation_ignores_notices_runs(tmp_path):
 def test_holding_names():
     assert looks_like_holding("708 N. Beeline Hwy LLC") and looks_like_holding("200 W. Second Street LLC")
     assert looks_like_holding("Desert Sun Holdings LLC")
+    assert looks_like_holding("1234 E Florence Blvd") and looks_like_holding("12 Main St., L.L.C.")
     assert not looks_like_holding("1st Choice Dental LLC") and not looks_like_holding("Gudelia, LLC")
+    assert not looks_like_holding("2 Brothers Way Trucking LLC")  # street word mid-name is not an address
+    assert not looks_like_holding("3 Rivers Lane Landscaping LLC")
 
 
 def test_town_run_failure_still_runs_notices(tmp_path, monkeypatch, capsys):
@@ -99,4 +104,35 @@ def test_source_map_refuses_file_without_dates(tmp_path):
         assert "event_date" in str(exc)
     else:
         raise AssertionError("expected a refusal")
+
+
+def test_business_address_notice_scores_as_plain_new_llc(tmp_path):
+    rows = HEADER + (f"Eloy Copy Center LLC,100 Main St,Eloy,85131,business,Jo Smith,25120002,LLC,{EFFECTIVE},"
+                     f"Casa Grande Dispatch,https://example.test/n5,{TODAY}\n").encode()
+    _notices(tmp_path, FakeClient({"p.csv": rows}))
+    (hit,) = api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=tmp_path / "donkey.db")
+    assert hit["signals"] == ["new_llc"] and hit["reasons"] == ["new business formed (formation notice)"]
+
+
+def test_notices_cap_under_one_dollar_still_runs(tmp_path, monkeypatch):
+    settings = {**_settings(tmp_path), "notices_cap_cents": 50}
+    client = FakeClient({"p.csv": NOTICES}, cost="40")
+    result = runner.run_notices(settings, client, db_path=tmp_path / "donkey.db", sleep=lambda s: None)
+    assert result["status"] == "done" and client.calls[0][3] == 50
+
+
+def test_any_job_error_still_runs_the_other(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("DONKEY_DB", str(tmp_path / "donkey.db"))
+    monkeypatch.setenv("DONKEY_HOME", str(tmp_path))
+    calls = []
+
+    def broken(*args, **kwargs):
+        raise KeyError("id")  # e.g. an unexpected API response shape
+
+    monkeypatch.setattr(runner, "run_weekly", broken)
+    monkeypatch.setattr(runner, "run_notices", lambda settings, dry_run=False: calls.append(dry_run) or {
+        "status": "skipped_cap", "town": "Pinal notices", "month_spent_cents": 2500})
+    monkeypatch.setattr("donkey.overture.snapshot_new", lambda area: [])
+    assert main(["growth-weekly"]) == 1 and calls == [False]
+    assert "growth-weekly failed" in capsys.readouterr().err
     assert date.fromisoformat(EFFECTIVE)

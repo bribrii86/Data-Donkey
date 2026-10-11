@@ -387,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         for job in jobs:  # one job failing never stops the other
             try:
                 _print_weekly(job())
-            except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            except Exception as exc:  # noqa: BLE001 - one job's failure, of any kind, never stops the other
                 print(f"growth-weekly failed: {exc}", file=sys.stderr)
                 failed = 1
         return failed
