@@ -20,7 +20,7 @@ from . import areas
 from .common import norm as _norm
 from .ingest import connect
 
-__all__ = ["SCORES", "diff_rows", "diff_snapshots", "is_home_based", "row_key", "take_snapshot"]
+__all__ = ["SCORES", "diff_rows", "diff_snapshots", "is_home_based", "redo_diffs", "row_key", "take_snapshot"]
 
 SOURCE_ID = "growth-diff"
 FIELDS = ("name", "street", "city", "zip", "phone", "website", "category")
@@ -38,6 +38,8 @@ SCORES = {
 _SUITE = re.compile(r"\b(suite|ste|unit|bldg|building|floor|fl)\b|#\s*\w", re.I)
 # Commercial arterials (John Wayne Pkwy, Florence Blvd, Pinal Ave, Maricopa Rd) are storefronts, not homes.
 _ARTERIAL = re.compile(r"\b(pkwy|parkway|hwy|highway|blvd|boulevard|pinal ave|maricopa rd|main st)\b", re.I)
+_UNIT = re.compile(r"\b(suite|ste|unit|bldg|building|floor|fl|apt|space|spc)\b\s*[a-z0-9-]*|#\s*[a-z0-9-]+")
+_DIRECTION = re.compile(r"\b(n|s|e|w|north|south|east|west)\b")
 _PO_BOX = re.compile(r"\bp\.?\s*o\.?\s*box\b", re.I)
 # Trades that usually run from a home address when the street has no suite.
 _HOME_TRADES = re.compile(
@@ -92,21 +94,48 @@ def _clean(row: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def _place(value: str) -> str:
+    """House number and street name, without the suite, the direction or a leading place name: "Promenade at Casa
+    Grande, 1004 North Promenade Pkwy Ste 141" and "1004 N Promenade Pkwy #141" are the same place. A suite added
+    or renumbered in the same building, or a spelling change, is not a move."""
+    street = _DIRECTION.sub(" ", _UNIT.sub(" ", _street(value)))  # "1004 North Promenade" = "1004 N Promenade"
+    match = re.search(r"\b(\d+)\s+([a-z0-9]+)", street)
+    return f"{match[1]} {match[2]}" if match else " ".join(street.split())
+
+
 def diff_rows(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Changes from old to new, one dict per change: kind, key, score, before, after. Businesses that drop out
-    are not reported: a missing row usually means the scrape missed a page, not that the business closed."""
+    are not reported: a missing row usually means the scrape missed a page, not that the business closed.
+
+    A row is matched to the old list by its key (phone + name), else by name + ZIP, but only to an old row that
+    has no match of its own in the new list: a chain's second store in the same ZIP (another Circle K, another
+    USPS) is a new location, not the first store moving."""
     old_rows = list(map(_clean, old))
     before = {row_key(r): r for r in old_rows}
-    by_name = {_name_zip(r): r for r in old_rows}
-    changes: list[dict[str, Any]] = []
     after = {row_key(r): r for r in map(_clean, new)}  # a key listed twice keeps its last row, like a snapshot
+    taken = {key for key in after if key in before}  # old rows still at their own key in the new list
+    by_name: dict[str, list[str]] = {}
+    for key, r in before.items():
+        if key not in taken:
+            by_name.setdefault(_name_zip(r), []).append(key)
+    matched: dict[str, dict[str, str]] = {key: before[key] for key in taken}
+    for same_address in (True, False):  # every same-address match first, so a new store can't claim an old one
+        for key, row in after.items():
+            candidates = by_name.get(_name_zip(row))
+            if key in matched or not candidates:
+                continue
+            pick = [k for k in candidates if not same_address or _place(before[k]["street"]) == _place(row["street"])]
+            if pick:
+                matched[key] = before[pick[0]]
+                candidates.remove(pick[0])
+    changes: list[dict[str, Any]] = []
     for key, row in after.items():
-        prev = before.get(key) or by_name.get(_name_zip(row))  # name+ZIP catches a phone added or changed
+        prev = matched.get(key)
         kinds: list[str] = []
         if prev is None:
             kinds.append("growth_new_business")
         else:
-            moved = _street(prev["street"]) != _street(row["street"]) and bool(row["street"])
+            moved = _place(prev["street"]) != _place(row["street"]) and bool(row["street"])
             if moved and prev["home_based"] == "1" and row["home_based"] == "0":
                 kinds.append("growth_home_to_office")
             elif moved:
@@ -176,58 +205,98 @@ def diff_snapshots(
     whose changes are weaker evidence (Overture)."""
     con = connect(db_path)
     try:
-        if new_id is None:
-            latest = con.execute("SELECT id, label FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1").fetchone()
-            if latest is None:
-                raise ValueError("no snapshots yet; run growth-snapshot first")
-            new_id = int(latest["id"])
-        new = con.execute("SELECT * FROM snapshots WHERE id = ?", (new_id,)).fetchone()
-        if new is None:
-            raise ValueError(f"no snapshot {new_id}")
-        if old_id is None:
-            prev = con.execute(
-                """SELECT id FROM snapshots WHERE label = ? AND id != ? AND taken_at <= ?
-                ORDER BY taken_at DESC, id DESC LIMIT 1""",
-                (new["label"], new_id, new["taken_at"]),
-            ).fetchone()
-            if prev is None:
-                return {"old_id": None, "new_id": new_id, "changes": 0, "by_kind": {}, "baseline": True}
-            old_id = int(prev["id"])
-        digest = f"diff:{old_id}:{new_id}"
-        if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
-            return {"old_id": old_id, "new_id": new_id, "changes": 0, "by_kind": {}, "duplicate": True}
-        changes = diff_rows(_snapshot_rows(con, old_id), _snapshot_rows(con, new_id))
-        now = datetime.now(timezone.utc).isoformat()
-        con.execute(
-            "INSERT OR IGNORE INTO sources (id, name, description, created_at) VALUES (?, ?, ?, ?)",
-            (SOURCE_ID, "Growth diff", "Changes between two snapshots of the same business list", now),
-        )
-        batch_id = int(con.execute(
-            """INSERT INTO batches (source_id, file_name, sha256, received_at, received_from, row_count)
-            VALUES (?, ?, ?, ?, ?, ?)""",
-            (SOURCE_ID, f"snapshots {old_id} to {new_id}", digest, now, "donkey growth-diff", len(changes)),
-        ).lastrowid)
-        by_kind: dict[str, int] = {}
-        for number, change in enumerate(changes, start=1):
-            after = change["after"]
-            record_id = int(con.execute(
-                """INSERT INTO records (source_id, batch_id, row_number, raw_json, business_id, match_status)
-                VALUES (?, ?, ?, ?, NULL, 'new')""",
-                (SOURCE_ID, batch_id, number, json.dumps(change, ensure_ascii=False, sort_keys=True)),
-            ).lastrowid)
-            score = (scores or {}).get(change["kind"], change["score"])
-            details = {"key": change["key"], "name": after["name"], "score": score,
-                       "before_street": change["before"].get("street", ""), "after_street": after["street"],
-                       "home_based": after["home_based"] == "1", "zip": after["zip"]}
-            con.execute(
-                """INSERT INTO events (business_id, record_id, kind, event_date, town, details_json)
-                VALUES (NULL, ?, ?, ?, ?, ?)""",
-                (record_id, change["kind"], event_date or new["taken_at"], after["city"],
-                 json.dumps(details, sort_keys=True)),
-            )
-            by_kind[change["kind"]] = by_kind.get(change["kind"], 0) + 1
+        result = _diff(con, old_id, new_id, event_date, scores)
         con.commit()
-        return {"old_id": old_id, "new_id": new_id, "changes": len(changes), "by_kind": by_kind}
+        return result
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+def _diff(
+    con: sqlite3.Connection, old_id: int | None, new_id: int | None, event_date: str | None,
+    scores: dict[str, int] | None,
+) -> dict[str, Any]:
+    """diff_snapshots inside the caller's transaction (no commit)."""
+    if new_id is None:
+        latest = con.execute("SELECT id, label FROM snapshots ORDER BY taken_at DESC, id DESC LIMIT 1").fetchone()
+        if latest is None:
+            raise ValueError("no snapshots yet; run growth-snapshot first")
+        new_id = int(latest["id"])
+    new = con.execute("SELECT * FROM snapshots WHERE id = ?", (new_id,)).fetchone()
+    if new is None:
+        raise ValueError(f"no snapshot {new_id}")
+    if old_id is None:
+        prev = con.execute(
+            """SELECT id FROM snapshots WHERE label = ? AND id != ? AND taken_at <= ?
+            ORDER BY taken_at DESC, id DESC LIMIT 1""",
+            (new["label"], new_id, new["taken_at"]),
+        ).fetchone()
+        if prev is None:
+            return {"old_id": None, "new_id": new_id, "changes": 0, "by_kind": {}, "baseline": True}
+        old_id = int(prev["id"])
+    digest = f"diff:{old_id}:{new_id}"
+    if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
+        return {"old_id": old_id, "new_id": new_id, "changes": 0, "by_kind": {}, "duplicate": True}
+    changes = diff_rows(_snapshot_rows(con, old_id), _snapshot_rows(con, new_id))
+    now = datetime.now(timezone.utc).isoformat()
+    con.execute(
+        "INSERT OR IGNORE INTO sources (id, name, description, created_at) VALUES (?, ?, ?, ?)",
+        (SOURCE_ID, "Growth diff", "Changes between two snapshots of the same business list", now),
+    )
+    batch_id = int(con.execute(
+        """INSERT INTO batches (source_id, file_name, sha256, received_at, received_from, row_count)
+        VALUES (?, ?, ?, ?, ?, ?)""",
+        (SOURCE_ID, f"snapshots {old_id} to {new_id}", digest, now, "donkey growth-diff", len(changes)),
+    ).lastrowid)
+    by_kind: dict[str, int] = {}
+    for number, change in enumerate(changes, start=1):
+        after = change["after"]
+        record_id = int(con.execute(
+            """INSERT INTO records (source_id, batch_id, row_number, raw_json, business_id, match_status)
+            VALUES (?, ?, ?, ?, NULL, 'new')""",
+            (SOURCE_ID, batch_id, number, json.dumps(change, ensure_ascii=False, sort_keys=True)),
+        ).lastrowid)
+        score = (scores or {}).get(change["kind"], change["score"])
+        details = {"key": change["key"], "name": after["name"], "score": score,
+                   "before_street": change["before"].get("street", ""), "after_street": after["street"],
+                   "home_based": after["home_based"] == "1", "zip": after["zip"]}
+        con.execute(
+            """INSERT INTO events (business_id, record_id, kind, event_date, town, details_json)
+            VALUES (NULL, ?, ?, ?, ?, ?)""",
+            (record_id, change["kind"], event_date or new["taken_at"], after["city"],
+             json.dumps(details, sort_keys=True)),
+        )
+        by_kind[change["kind"]] = by_kind.get(change["kind"], 0) + 1
+    return {"old_id": old_id, "new_id": new_id, "changes": len(changes), "by_kind": by_kind}
+
+
+def redo_diffs(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Recompute every stored snapshot diff with the current rules (v0.5.7 chain and address fixes): each diff's events
+    are deleted and the diff runs again with the same snapshots, event date and scores (Overture diffs keep their
+    lower scores). One transaction: if anything fails, every old diff is kept. Safe to run more than once."""
+    from . import overture  # here: overture imports this module
+
+    con = connect(db_path)
+    try:
+        con.execute("BEGIN IMMEDIATE")
+        batches = con.execute("SELECT id, sha256 FROM batches WHERE source_id = ? ORDER BY id", (SOURCE_ID,)).fetchall()
+        plan = []
+        for batch in batches:
+            old_id, new_id = (int(part) for part in batch["sha256"].removeprefix("diff:").split(":"))
+            dated = con.execute("SELECT MIN(event_date) FROM events WHERE record_id IN "
+                                "(SELECT id FROM records WHERE batch_id = ?)", (batch["id"],)).fetchone()[0]
+            label = con.execute("SELECT label FROM snapshots WHERE id = ?", (new_id,)).fetchone()["label"]
+            plan.append((old_id, new_id, dated, overture.SCORES if label.startswith("overture ") else None))
+            con.execute("DELETE FROM events WHERE record_id IN (SELECT id FROM records WHERE batch_id = ?)",
+                        (batch["id"],))
+            con.execute("DELETE FROM records WHERE batch_id = ?", (batch["id"],))
+            con.execute("DELETE FROM batches WHERE id = ?", (batch["id"],))
+        results = [_diff(con, old_id, new_id, dated, scores) for old_id, new_id, dated, scores in plan]
+        con.commit()
+        return results
     except Exception:
         con.rollback()
         raise
