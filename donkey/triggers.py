@@ -41,10 +41,15 @@ _HOLDING = re.compile(
     r"parkway|ct|court|pl|place|cir|circle|trl|trail)\.?,?(\s+(llc|l\.l\.c\.|inc|corp|co|lp|llp)\.?)?\s*$"
     r"|\bholdings?\b", re.IGNORECASE)
 # Self-serve machines inside other stores (ATMs, coin and crypto kiosks, DVD boxes, parcel lockers) appear in
-# Overture as their own places but have no office to sell to; they stay in the store but don't score.
+# Overture as their own places but have no office to sell to; their growth signals don't score. Brands match only at
+# the start of the name, and a name with a company or service word ("ATM Repair LLC", "Redbox Marketing Group") is a
+# business, not a machine.
 _KIOSK = re.compile(
-    r"\b(atm|coinme|coinstar|coinflip|bitcoin|libertyx|bitstop|rockitcoin|byte federal|athena bitcoin|budget coin|"
-    r"redbox|ecoatm|amazon (hub )?locker|keyme|glacier water|primo water)\b", re.IGNORECASE)
+    r"^\s*(coinme|coinstar|coinflip|coinhub|libertyx|bitstop|rockitcoin|byte federal|athena bitcoin|bitcoin depot|"
+    r"ecoatm|keyme|redbox|amazon (hub )?locker)\b|\b(bitcoin|crypto) atm\b|\batm\b", re.IGNORECASE)
+_NOT_KIOSK = re.compile(
+    r"\b(llc|l\.l\.c|inc|corp|co|company|pllc|group|services?|repair|consulting|marketing|sales|solutions|dealer|"
+    r"office|jewelry|supply)\b\.?", re.IGNORECASE)
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -78,7 +83,7 @@ def _growth_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since:
     )
     for row in rows:
         details = json.loads(row["details_json"])
-        if area and not areas.contains(area, details.get("zip", ""), row["town"]):
+        if looks_like_kiosk(details["name"]) or (area and not areas.contains(area, details.get("zip", ""), row["town"])):
             continue
         yield {"name": details["name"], "zip": details.get("zip", ""), "town": row["town"],
                "score": int(details["score"]), "signal": row["kind"].removeprefix("growth_"), "date": row["event_date"],
@@ -153,7 +158,7 @@ def looks_like_holding(name: str) -> bool:
 
 
 def looks_like_kiosk(name: str) -> bool:
-    return bool(_KIOSK.search(name or ""))
+    return bool(_KIOSK.search(name or "")) and not _NOT_KIOSK.search(name or "")
 
 
 def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
@@ -197,8 +202,6 @@ def call_this_week(
         con.close()
     totals: dict[str, dict] = {}
     for hit in hits:
-        if looks_like_kiosk(hit["name"]):
-            continue
         item = totals.setdefault(_key(hit["name"], hit["zip"]), {
             "name": hit["name"], "zip": hit["zip"], "town": hit["town"], "score": 0, "signals": [], "reasons": [],
             "last_date": "", "details": [],

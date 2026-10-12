@@ -7,7 +7,8 @@ name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/do
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-12)
 - v0.5.8: kiosk filter. call-this-week skips self-serve machines inside other stores (ATMs, Coinme/Coinstar/bitcoin
-  kiosks, Redbox, ecoATM, Amazon Lockers, KeyMe, water machines; `triggers.looks_like_kiosk`). Buck 2026-10-12 20:19
+  kiosks, Redbox, ecoATM, Amazon Lockers, KeyMe; `triggers.looks_like_kiosk`, growth rows only; names with a company
+  or service word like "ATM Repair LLC" still score). Buck 2026-10-12 20:19
   UTC: kiosks out, government offices (Pinal County Planning) stay. Buck's list after v0.5.7: 7 rows; Coinme drops.
 - v0.5.7: growth diff noise fix. First real run (2026-10-11 23:34 UTC on Buck's PC; the 10:00 UTC Sunday run failed
   with "Agent not found", fixed in .env) put 24 Overture businesses on call-this-week, nearly all false: a chain's
