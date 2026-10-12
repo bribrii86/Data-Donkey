@@ -153,3 +153,36 @@ def test_same_signal_twice_counts_once_on_call_this_week(tmp_path):
     growth.diff_snapshots(db_path=db)
     (hit,) = [h for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db) if h["name"] == "Coinme"]
     assert hit["score"] == 3 and hit["reasons"] == ["new business on the list"]
+
+
+def test_same_name_zip_match_prefers_the_same_address():
+    old = [{"name": "Banner Health", "street": s, "city": "Casa Grande", "zip": "85122", "phone": p,
+            "category": "clinic"} for s, p in (("1811 E McMurray Blvd", "520-555-0301"),
+                                               ("3235 N Hunt Hwy", "520-555-0302"))]
+    new = [{**old[1], "phone": "520-555-0402"}, {**old[0], "phone": "520-555-0401"}]  # both phones changed
+    kinds = sorted(c["kind"] for c in growth.diff_rows(old, new))
+    assert kinds == ["growth_new_phone", "growth_new_phone"]  # no false moves, whatever the row order
+
+
+def test_redo_diffs_keeps_overture_scores_and_is_all_or_nothing(tmp_path, monkeypatch):
+    from donkey import overture
+
+    db = tmp_path / "donkey.db"
+    moved = [{**WEEK1[1], "street": "2000 N Trekell Rd Ste 9"}]
+    growth.take_snapshot(_csv(tmp_path / "o1.csv", WEEK1[1:2]), "overture stephanie", "2026-08-19", db_path=db)
+    growth.take_snapshot(_csv(tmp_path / "o2.csv", moved), "overture stephanie", "2026-09-23", db_path=db)
+    growth.diff_snapshots(db_path=db, event_date="2026-10-11", scores=overture.SCORES)
+
+    def broken(*args):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(growth, "_diff", broken)
+    try:
+        growth.redo_diffs(db_path=db)
+    except RuntimeError:
+        pass
+    monkeypatch.undo()
+    (event,) = api.events("growth_moved", ["Casa Grande"], db_path=db)  # the failed redo kept the old diff
+    growth.redo_diffs(db_path=db)
+    (event,) = api.events("growth_moved", ["Casa Grande"], db_path=db)
+    assert '"score": 2' in event["details_json"] and event["event_date"] == "2026-10-11"  # Overture's lower score
