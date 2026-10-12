@@ -145,13 +145,14 @@ def test_redo_diffs_recomputes_stored_events(tmp_path, monkeypatch, capsys):
 
 def test_same_signal_twice_counts_once_on_call_this_week(tmp_path):
     db = tmp_path / "donkey.db"
-    kiosks = [{"name": "Coinme", "street": s, "city": "Casa Grande", "zip": "85122", "phone": f"520-555-020{n}",
-               "website": "", "category": "atm", "date_seen": "2026-10-12"}
-              for n, s in enumerate(("1 Main St", "2 Pinal Ave", "3 Hunt Hwy"))]  # three kiosks, three events
+    stores = [{"name": "Dutch Bros Coffee", "street": s, "city": "Casa Grande", "zip": "85122",
+               "phone": f"520-555-020{n}", "website": "", "category": "coffee_shop", "date_seen": "2026-10-12"}
+              for n, s in enumerate(("1 Main St", "2 Pinal Ave", "3 Hunt Hwy"))]  # three stores, three events
     growth.take_snapshot(_csv(tmp_path / "w1.csv", WEEK1), "t", "2026-10-05", db_path=db)
-    growth.take_snapshot(_csv(tmp_path / "w2.csv", kiosks), "t", "2026-10-12", db_path=db)
+    growth.take_snapshot(_csv(tmp_path / "w2.csv", stores), "t", "2026-10-12", db_path=db)
     growth.diff_snapshots(db_path=db)
-    (hit,) = [h for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db) if h["name"] == "Coinme"]
+    (hit,) = [h for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)
+              if h["name"] == "Dutch Bros Coffee"]
     assert hit["score"] == 3 and hit["reasons"] == ["new business on the list"]
 
 
@@ -195,3 +196,19 @@ def test_new_store_listed_first_does_not_claim_the_old_store():
            {**old[0], "phone": "520-836-0000"}]  # the old store, its phone changed
     kinds = {(c["after"]["street"], c["kind"]) for c in growth.diff_rows(old, new)}
     assert kinds == {("1415 E Florence Blvd", "growth_new_business"), ("1776 E McCartney Rd", "growth_new_phone")}
+
+
+def test_kiosks_do_not_score_but_government_offices_do(tmp_path):
+    """v0.5.8: Buck 2026-10-12: a Coinme kiosk has no office to sell to; Pinal County Planning does."""
+    db = tmp_path / "donkey.db"
+    names = ("Coinme", "Bitcoin Depot | Bitcoin ATM", "Redbox", "ecoATM", "Amazon Locker - Greek", "Chase ATM",
+             "Pinal County Planning & Development", "Atmosphere Salon")
+    rows = [{"name": name, "street": f"{n} Main St", "city": "Casa Grande", "zip": "85122",
+             "phone": f"520-555-03{n:02d}", "website": "", "category": "", "date_seen": "2026-10-12"}
+            for n, name in enumerate(names, 1)]
+    growth.take_snapshot(_csv(tmp_path / "w1.csv", WEEK1), "t", "2026-10-05", db_path=db)
+    growth.take_snapshot(_csv(tmp_path / "w2.csv", rows), "t", "2026-10-12", db_path=db)
+    growth.diff_snapshots(db_path=db)
+    listed = {h["name"] for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)}
+    assert {"Pinal County Planning & Development", "Atmosphere Salon"} <= listed
+    assert not listed & set(names[:6])

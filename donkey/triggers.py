@@ -40,6 +40,11 @@ _HOLDING = re.compile(
     r"^\s*\d+\s+(\S+\s+){0,4}(st|street|rd|road|ave|avenue|hwy|highway|ln|lane|dr|drive|blvd|boulevard|way|pkwy|"
     r"parkway|ct|court|pl|place|cir|circle|trl|trail)\.?,?(\s+(llc|l\.l\.c\.|inc|corp|co|lp|llp)\.?)?\s*$"
     r"|\bholdings?\b", re.IGNORECASE)
+# Self-serve machines inside other stores (ATMs, coin and crypto kiosks, DVD boxes, parcel lockers) appear in
+# Overture as their own places but have no office to sell to; they stay in the store but don't score.
+_KIOSK = re.compile(
+    r"\b(atm|coinme|coinstar|coinflip|bitcoin|libertyx|bitstop|rockitcoin|byte federal|athena bitcoin|budget coin|"
+    r"redbox|ecoatm|amazon (hub )?locker|keyme|glacier water|primo water)\b", re.IGNORECASE)
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -147,6 +152,10 @@ def looks_like_holding(name: str) -> bool:
     return bool(_HOLDING.search(name or ""))
 
 
+def looks_like_kiosk(name: str) -> bool:
+    return bool(_KIOSK.search(name or ""))
+
+
 def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
     start = (as_of - timedelta(days=NEW_LLC_LOOKBACK_DAYS)).isoformat()
     rows = con.execute(
@@ -188,6 +197,8 @@ def call_this_week(
         con.close()
     totals: dict[str, dict] = {}
     for hit in hits:
+        if looks_like_kiosk(hit["name"]):
+            continue
         item = totals.setdefault(_key(hit["name"], hit["zip"]), {
             "name": hit["name"], "zip": hit["zip"], "town": hit["town"], "score": 0, "signals": [], "reasons": [],
             "last_date": "", "details": [],
