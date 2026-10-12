@@ -122,6 +122,9 @@ python -m donkey growth-diff
   event dates and scores). Run it once after upgrading to v0.5.7.
 - `call-this-week` counts each kind of signal once per business, so three kiosks of one chain in a ZIP are one
   "new business", not three (v0.5.7).
+- `call-this-week` skips growth signals from self-serve machines inside other stores (ATMs, Coinme/Coinstar/bitcoin
+  kiosks, Redbox, ecoATM, Amazon Lockers, KeyMe): no office to sell to. A name with a company or service word
+  ("ATM Repair LLC") still scores, and so do notices, SBA loans and UCC filings. Government offices score (v0.5.8).
 
 ## Areas, UCC monthly index and "call this week" (v0.5.2)
 

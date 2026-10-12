@@ -40,6 +40,16 @@ _HOLDING = re.compile(
     r"^\s*\d+\s+(\S+\s+){0,4}(st|street|rd|road|ave|avenue|hwy|highway|ln|lane|dr|drive|blvd|boulevard|way|pkwy|"
     r"parkway|ct|court|pl|place|cir|circle|trl|trail)\.?,?(\s+(llc|l\.l\.c\.|inc|corp|co|lp|llp)\.?)?\s*$"
     r"|\bholdings?\b", re.IGNORECASE)
+# Self-serve machines inside other stores (ATMs, coin and crypto kiosks, DVD boxes, parcel lockers) appear in
+# Overture as their own places but have no office to sell to; their growth signals don't score. Brands match only at
+# the start of the name, and a name with a company or service word ("ATM Repair LLC", "Redbox Marketing Group") is a
+# business, not a machine.
+_KIOSK = re.compile(
+    r"^\s*(coinme|coinstar|coinflip|coinhub|libertyx|bitstop|rockitcoin|byte federal|athena bitcoin|bitcoin depot|"
+    r"ecoatm|keyme|redbox|amazon (hub )?locker)\b|\b(bitcoin|crypto) atm\b|\batm\b", re.IGNORECASE)
+_NOT_KIOSK = re.compile(
+    r"\b(llc|l\.l\.c|inc|corp|co|company|pllc|group|services?|repair|consulting|marketing|sales|solutions|dealer|"
+    r"office|jewelry|supply)\b\.?", re.IGNORECASE)
 REASONS = {
     "home_to_office": "moved from a home address to an office",
     "new_business": "new business on the list",
@@ -73,7 +83,7 @@ def _growth_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since:
     )
     for row in rows:
         details = json.loads(row["details_json"])
-        if area and not areas.contains(area, details.get("zip", ""), row["town"]):
+        if looks_like_kiosk(details["name"]) or (area and not areas.contains(area, details.get("zip", ""), row["town"])):
             continue
         yield {"name": details["name"], "zip": details.get("zip", ""), "town": row["town"],
                "score": int(details["score"]), "signal": row["kind"].removeprefix("growth_"), "date": row["event_date"],
@@ -145,6 +155,10 @@ def _sba_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
 
 def looks_like_holding(name: str) -> bool:
     return bool(_HOLDING.search(name or ""))
+
+
+def looks_like_kiosk(name: str) -> bool:
+    return bool(_KIOSK.search(name or "")) and not _NOT_KIOSK.search(name or "")
 
 
 def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:

@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from donkey import api, ingest, runner
 from donkey.ingest import connect, main
-from donkey.triggers import looks_like_holding
+from donkey.triggers import looks_like_holding, looks_like_kiosk
 
 from test_runner import FakeClient, _settings
 
@@ -136,3 +136,22 @@ def test_any_job_error_still_runs_the_other(tmp_path, monkeypatch, capsys):
     assert main(["growth-weekly"]) == 1 and calls == [False]
     assert "growth-weekly failed" in capsys.readouterr().err
     assert date.fromisoformat(EFFECTIVE)
+
+
+def test_kiosk_filter_only_drops_overture_growth_rows(tmp_path):
+    """v0.5.8 review: a formation notice is a real business even when its name reads like a kiosk."""
+    notices = HEADER + (f"Bitcoin ATM,820 W Cottonwood Ln,Casa Grande,85122,business,Jo Smith,25129999,LLC,"
+                        f"{EFFECTIVE},Casa Grande Dispatch,https://example.test/n9,{TODAY}\n").encode()
+    _notices(tmp_path, FakeClient({"p.csv": notices}))
+    hits = api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=tmp_path / "donkey.db")
+    assert [h["name"] for h in hits] == ["Bitcoin ATM"]
+
+
+def test_kiosk_names():
+    for name in ("Coinme", "Redbox", "ecoATM", "Chase ATM", "ATM Circle K", "Amazon Locker - Greek", "KeyMe Locksmiths",
+                 "Bitcoin Depot | Bitcoin ATM", "CoinFlip Bitcoin ATM - JC Mart (Casa Grande)"):
+        assert looks_like_kiosk(name), name
+    for name in ("ATM Repair & Service", "Pinal ATM Services LLC", "Bitcoin Consulting LLC", "Budget Coin & Jewelry",
+                 "Redbox Marketing Group", "Primo Water Dealer Office", "Glacier Water Services Inc",
+                 "Atmosphere Salon", "Pop-A-Lock Locksmith", "Pinal County Planning & Development"):
+        assert not looks_like_kiosk(name), name
