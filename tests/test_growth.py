@@ -186,3 +186,12 @@ def test_redo_diffs_keeps_overture_scores_and_is_all_or_nothing(tmp_path, monkey
     growth.redo_diffs(db_path=db)
     (event,) = api.events("growth_moved", ["Casa Grande"], db_path=db)
     assert '"score": 2' in event["details_json"] and event["event_date"] == "2026-10-11"  # Overture's lower score
+
+
+def test_new_store_listed_first_does_not_claim_the_old_store():
+    old = [{"name": "Circle K", "street": "1776 E McCartney Rd", "city": "Casa Grande", "zip": "85122",
+            "phone": "520-836-5157", "category": "gas station"}]
+    new = [{**old[0], "street": "1415 E Florence Blvd", "phone": "520-426-9328"},  # the new store, listed first
+           {**old[0], "phone": "520-836-0000"}]  # the old store, its phone changed
+    kinds = {(c["after"]["street"], c["kind"]) for c in growth.diff_rows(old, new)}
+    assert kinds == {("1415 E Florence Blvd", "growth_new_business"), ("1776 E McCartney Rd", "growth_new_phone")}

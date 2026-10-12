@@ -118,14 +118,19 @@ def diff_rows(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict
     for key, r in before.items():
         if key not in taken:
             by_name.setdefault(_name_zip(r), []).append(key)
+    matched: dict[str, dict[str, str]] = {key: before[key] for key in taken}
+    for same_address in (True, False):  # every same-address match first, so a new store can't claim an old one
+        for key, row in after.items():
+            candidates = by_name.get(_name_zip(row))
+            if key in matched or not candidates:
+                continue
+            pick = [k for k in candidates if not same_address or _place(before[k]["street"]) == _place(row["street"])]
+            if pick:
+                matched[key] = before[pick[0]]
+                candidates.remove(pick[0])
     changes: list[dict[str, Any]] = []
     for key, row in after.items():
-        prev = before.get(key)
-        candidates = by_name.get(_name_zip(row))
-        if prev is None and candidates:  # name+ZIP catches a phone added or changed; same address first
-            same = [k for k in candidates if _place(before[k]["street"]) == _place(row["street"])]
-            prev = before[(same or candidates)[0]]
-            candidates.remove((same or candidates)[0])
+        prev = matched.get(key)
         kinds: list[str] = []
         if prev is None:
             kinds.append("growth_new_business")
