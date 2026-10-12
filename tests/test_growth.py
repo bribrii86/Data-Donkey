@@ -98,3 +98,58 @@ def test_growth_cli(tmp_path, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "nothing to compare yet" in out and "5 changes" in out and "home_to_office: 1" in out
     assert main(["growth-snapshot", "--file", str(tmp_path / "missing.csv"), "--label", "t"]) == 1
+
+
+def test_chain_store_and_address_spelling_are_not_moves():
+    """v0.5.7: the 2026-10-11 Overture diff called 235 businesses moved; most were a chain's other store or the
+    same address spelled differently."""
+    old = [
+        {"name": "Circle K", "street": "1776 E McCartney Rd", "city": "Casa Grande", "zip": "85122",
+         "phone": "520-836-5157", "category": "gas station"},
+        {"name": "Shoe Dept. Encore", "street": "1004 N Promenade Pkwy, Promenade At Casa Grande, Ste 141",
+         "city": "Casa Grande", "zip": "85122", "phone": "520-836-1464", "category": "shoe store"},
+        {"name": "Hanger Clinic", "street": "1515 East Florence Blvd Suite 107", "city": "Casa Grande",
+         "zip": "85122", "phone": "520-555-0110", "category": "clinic"},
+        {"name": "Tena Transport", "street": "1146 Jimmie Kerr Blvd", "city": "Casa Grande", "zip": "85122",
+         "phone": "520-555-0111", "category": "trucking"},
+        {"name": "Sun Life Health", "street": "865 N Arizola Rd", "city": "Casa Grande", "zip": "85122",
+         "phone": "520-836-3446", "category": "clinic"},
+    ]
+    new = [
+        old[0],  # the first store is still there
+        {**old[0], "street": "1415 E Florence Blvd", "phone": "520-426-9328"},  # a second store, new phone
+        {**old[1], "street": "1004 N Promenade Pkwy #141"},
+        {**old[2], "street": "1515 E Florence Blvd"},
+        {**old[3], "street": "1146 E Jimmie Kerr Blvd"},
+        {**old[4], "street": "1863 E Florence Blvd", "phone": "888-381-3446"},  # the old site is gone: a move
+    ]
+    kinds = {(c["after"]["name"], c["after"]["street"], c["kind"]) for c in growth.diff_rows(old, new)}
+    assert kinds == {
+        ("Circle K", "1415 E Florence Blvd", "growth_new_business"),
+        ("Sun Life Health", "1863 E Florence Blvd", "growth_moved"),
+        ("Sun Life Health", "1863 E Florence Blvd", "growth_new_phone"),
+    }
+
+
+def test_redo_diffs_recomputes_stored_events(tmp_path, monkeypatch, capsys):
+    db = tmp_path / "donkey.db"
+    monkeypatch.setenv("DONKEY_DB", str(db))
+    growth.take_snapshot(_csv(tmp_path / "w1.csv", WEEK1), "t", "2026-10-05", db_path=db)
+    growth.take_snapshot(_csv(tmp_path / "w2.csv", WEEK2), "t", "2026-10-12", db_path=db)
+    growth.diff_snapshots(db_path=db, event_date="2026-10-13")
+    assert main(["growth-diff", "--redo-all"]) == 0 and "5 changes" in capsys.readouterr().out
+    assert main(["growth-diff", "--redo-all"]) == 0  # again: same events, not doubled
+    events = api.events("growth_moved", ["Casa Grande"], db_path=db)
+    assert len(events) == 1 and events[0]["event_date"] == "2026-10-13"  # keeps the original event date
+
+
+def test_same_signal_twice_counts_once_on_call_this_week(tmp_path):
+    db = tmp_path / "donkey.db"
+    kiosks = [{"name": "Coinme", "street": s, "city": "Casa Grande", "zip": "85122", "phone": f"520-555-020{n}",
+               "website": "", "category": "atm", "date_seen": "2026-10-12"}
+              for n, s in enumerate(("1 Main St", "2 Pinal Ave", "3 Hunt Hwy"))]  # three kiosks, three events
+    growth.take_snapshot(_csv(tmp_path / "w1.csv", WEEK1), "t", "2026-10-05", db_path=db)
+    growth.take_snapshot(_csv(tmp_path / "w2.csv", kiosks), "t", "2026-10-12", db_path=db)
+    growth.diff_snapshots(db_path=db)
+    (hit,) = [h for h in api.call_this_week("stephanie", as_of="2026-10-12", db_path=db) if h["name"] == "Coinme"]
+    assert hit["score"] == 3 and hit["reasons"] == ["new business on the list"]

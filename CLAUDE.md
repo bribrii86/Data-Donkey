@@ -5,7 +5,13 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-11)
+## Current state (2026-10-12)
+- v0.5.7: growth diff noise fix. First real run (2026-10-11 23:34 UTC on Buck's PC; the 10:00 UTC Sunday run failed
+  with "Agent not found", fixed in .env) put 24 Overture businesses on call-this-week, nearly all false: a chain's
+  other store (Circle K, USPS, Banner) read as the first store moving, and suite or N/North spelling changes read as
+  moves. Name+ZIP fallback now only matches an old row that vanished, moves compare house number + street name, and
+  call-this-week counts each signal kind once per business. Same Overture diff: moves 235 to 72, list 24 to 6.
+  `growth-diff --redo-all` recomputes stored diffs (Buck runs it once after upgrading).
 - v0.5.6: PR #5 review fixes and the full AZCC Pinal paper list. Notices prompt now checks every paper the Commission
   approves for Pinal (Casa Grande Dispatch, Arizona Chinese American / Az Chinese News of Phoenix, Copper Basin News,
   San Manuel Miner, Superior Sun). Notices that give only the statutory agent's address score 3 as `new_llc_agent`

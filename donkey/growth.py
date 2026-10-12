@@ -20,7 +20,7 @@ from . import areas
 from .common import norm as _norm
 from .ingest import connect
 
-__all__ = ["SCORES", "diff_rows", "diff_snapshots", "is_home_based", "row_key", "take_snapshot"]
+__all__ = ["SCORES", "diff_rows", "diff_snapshots", "is_home_based", "redo_diffs", "row_key", "take_snapshot"]
 
 SOURCE_ID = "growth-diff"
 FIELDS = ("name", "street", "city", "zip", "phone", "website", "category")
@@ -38,6 +38,8 @@ SCORES = {
 _SUITE = re.compile(r"\b(suite|ste|unit|bldg|building|floor|fl)\b|#\s*\w", re.I)
 # Commercial arterials (John Wayne Pkwy, Florence Blvd, Pinal Ave, Maricopa Rd) are storefronts, not homes.
 _ARTERIAL = re.compile(r"\b(pkwy|parkway|hwy|highway|blvd|boulevard|pinal ave|maricopa rd|main st)\b", re.I)
+_UNIT = re.compile(r"\b(suite|ste|unit|bldg|building|floor|fl|apt|space|spc)\b\s*[a-z0-9-]*|#\s*[a-z0-9-]+")
+_DIRECTION = re.compile(r"\b(n|s|e|w|north|south|east|west)\b")
 _PO_BOX = re.compile(r"\bp\.?\s*o\.?\s*box\b", re.I)
 # Trades that usually run from a home address when the street has no suite.
 _HOME_TRADES = re.compile(
@@ -92,21 +94,40 @@ def _clean(row: dict[str, Any]) -> dict[str, str]:
     return out
 
 
+def _place(value: str) -> str:
+    """House number and street name, without the suite, the direction or a leading place name: "Promenade at Casa
+    Grande, 1004 North Promenade Pkwy Ste 141" and "1004 N Promenade Pkwy #141" are the same place. A suite added
+    or renumbered in the same building, or a spelling change, is not a move."""
+    street = _DIRECTION.sub(" ", _UNIT.sub(" ", _street(value)))  # "1004 North Promenade" = "1004 N Promenade"
+    match = re.search(r"\b(\d+)\s+([a-z0-9]+)", street)
+    return f"{match[1]} {match[2]}" if match else " ".join(street.split())
+
+
 def diff_rows(old: list[dict[str, Any]], new: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Changes from old to new, one dict per change: kind, key, score, before, after. Businesses that drop out
-    are not reported: a missing row usually means the scrape missed a page, not that the business closed."""
+    are not reported: a missing row usually means the scrape missed a page, not that the business closed.
+
+    A row is matched to the old list by its key (phone + name), else by name + ZIP, but only to an old row that
+    has no match of its own in the new list: a chain's second store in the same ZIP (another Circle K, another
+    USPS) is a new location, not the first store moving."""
     old_rows = list(map(_clean, old))
     before = {row_key(r): r for r in old_rows}
-    by_name = {_name_zip(r): r for r in old_rows}
-    changes: list[dict[str, Any]] = []
     after = {row_key(r): r for r in map(_clean, new)}  # a key listed twice keeps its last row, like a snapshot
+    taken = {key for key in after if key in before}  # old rows still at their own key in the new list
+    by_name: dict[str, list[str]] = {}
+    for key, r in before.items():
+        if key not in taken:
+            by_name.setdefault(_name_zip(r), []).append(key)
+    changes: list[dict[str, Any]] = []
     for key, row in after.items():
-        prev = before.get(key) or by_name.get(_name_zip(row))  # name+ZIP catches a phone added or changed
+        prev = before.get(key)
+        if prev is None and by_name.get(_name_zip(row)):  # name+ZIP catches a phone added or changed
+            prev = before[by_name[_name_zip(row)].pop(0)]
         kinds: list[str] = []
         if prev is None:
             kinds.append("growth_new_business")
         else:
-            moved = _street(prev["street"]) != _street(row["street"]) and bool(row["street"])
+            moved = _place(prev["street"]) != _place(row["street"]) and bool(row["street"])
             if moved and prev["home_based"] == "1" and row["home_based"] == "0":
                 kinds.append("growth_home_to_office")
             elif moved:
@@ -233,3 +254,32 @@ def diff_snapshots(
         raise
     finally:
         con.close()
+
+
+def redo_diffs(db_path: str | Path | None = None) -> list[dict[str, Any]]:
+    """Recompute every stored snapshot diff with the current rules (v0.5.7 chain and address fixes): each diff's events
+    are deleted and the diff runs again with the same snapshots, event date and scores (Overture diffs keep their
+    lower scores). Safe to run more than once."""
+    from . import overture  # here: overture imports this module
+
+    con = connect(db_path)
+    try:
+        batches = con.execute("SELECT id, sha256 FROM batches WHERE source_id = ? ORDER BY id", (SOURCE_ID,)).fetchall()
+        plan = []
+        for batch in batches:
+            old_id, new_id = (int(part) for part in batch["sha256"].removeprefix("diff:").split(":"))
+            dated = con.execute("SELECT MIN(event_date) FROM events WHERE record_id IN "
+                                "(SELECT id FROM records WHERE batch_id = ?)", (batch["id"],)).fetchone()[0]
+            label = con.execute("SELECT label FROM snapshots WHERE id = ?", (new_id,)).fetchone()["label"]
+            plan.append((old_id, new_id, dated, overture.SCORES if label.startswith("overture ") else None))
+            con.execute("DELETE FROM events WHERE record_id IN (SELECT id FROM records WHERE batch_id = ?)",
+                        (batch["id"],))
+            con.execute("DELETE FROM records WHERE batch_id = ?", (batch["id"],))
+            con.execute("DELETE FROM batches WHERE id = ?", (batch["id"],))
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+    return [diff_snapshots(old_id, new_id, db_path, dated, scores) for old_id, new_id, dated, scores in plan]

@@ -104,7 +104,10 @@ python -m donkey growth-diff
 
 - Columns: `name, street, city, zip, phone, website, category`, optional
   `home_based` and `date_seen` (the snapshot date; else `--taken-at`, else today).
-- Rows match across snapshots on phone + name, else name + ZIP.
+- Rows match across snapshots on phone + name, else name + ZIP, but only to an old row that has no match of its
+  own: a chain's second store in the same ZIP is a new location, not the first store moving (v0.5.7).
+- A move means a different house number or street name. A suite added or renumbered, a direction (N/North) or a
+  leading place name ("Promenade at Casa Grande, ...") is not a move (v0.5.7).
 - Events and points: `growth_home_to_office` 5 (home address to a suite or
   commercial street), `growth_new_business` 3, `growth_moved` 3,
   `growth_new_website` 1, `growth_new_phone` 1, `growth_category_change` 1.
@@ -115,6 +118,10 @@ python -m donkey growth-diff
 - `donkey.api.growth(towns, since, min_score=3)` sums points per business,
   highest first. The Monday list shows these as "call this week".
 - Snapshot and diff are stored once each (SHA-256 / snapshot pair).
+- `python -m donkey growth-diff --redo-all` recomputes every stored diff with the current rules (same snapshots,
+  event dates and scores). Run it once after upgrading to v0.5.7.
+- `call-this-week` counts each kind of signal once per business, so three kiosks of one chain in a ZIP are one
+  "new business", not three (v0.5.7).
 
 ## Areas, UCC monthly index and "call this week" (v0.5.2)
 

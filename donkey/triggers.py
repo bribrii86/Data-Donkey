@@ -192,6 +192,8 @@ def call_this_week(
             "name": hit["name"], "zip": hit["zip"], "town": hit["town"], "score": 0, "signals": [], "reasons": [],
             "last_date": "", "details": [],
         })
+        if hit["signal"] in item["signals"]:  # one point set per kind: three Coinme kiosks in a ZIP aren't 3 new businesses
+            continue
         item["score"] += int(hit["score"])
         item["signals"].append(hit["signal"])
         item["reasons"].append(REASONS.get(hit["signal"], hit.get("reason", hit["signal"])))

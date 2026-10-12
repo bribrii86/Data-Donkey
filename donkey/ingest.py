@@ -337,6 +337,7 @@ def main(argv: list[str] | None = None) -> int:
     diff = commands.add_parser("growth-diff", help="turn changes between the latest two snapshots into events")
     diff.add_argument("--old", type=int, help="older snapshot ID (default: previous with the same label)")
     diff.add_argument("--new", type=int, help="newer snapshot ID (default: latest)")
+    diff.add_argument("--redo-all", action="store_true", help="recompute every stored diff with the current rules")
     weekly = commands.add_parser("growth-weekly", help="paid: run the Console agent for one town, then snapshot+diff")
     weekly.add_argument("--town", help="town to run (default: next in the area's rotation)")
     weekly.add_argument("--dry-run", action="store_true", help="show town, budget and prompt; no API calls")
@@ -416,6 +417,9 @@ def main(argv: list[str] | None = None) -> int:
                 print("Already stored; no changes made." if result["duplicate"] else
                       f"snapshot {result['snapshot_id']}: {result['row_count']} rows, "
                       f"{result['home_based']} look home-based")
+            elif args.redo_all:
+                for result in growth.redo_diffs():
+                    print(f"snapshots {result['old_id']} to {result['new_id']}: {result['changes']} changes")
             else:
                 result = growth.diff_snapshots(args.old, args.new)
                 if result.get("baseline"):
