@@ -299,11 +299,19 @@ def _overture_line(result: dict[str, Any]) -> str:
 
 
 def _print_weekly(result: dict[str, Any]) -> None:
-    if result["status"] == "dry_run":
+    if result["status"] in ("nothing_to_check", "no_bodies"):
+        free = (result.get("free") or {}).get("counts")
+        print(f"{result['town']}: nothing for the paid check" + (f" (free rules: {free})" if free else "")
+              + (f"; {result['note']}" if result.get("note") else ""))
+    elif result["status"] == "dry_run":
         print(f"job: {result['town']} ({result['area']}); this month: ${result['month_spent_cents'] / 100:.2f} "
               f"spent; this run's cap: ${result['budget_cents'] / 100:.2f}\n\n{result['prompt']}\n")
     elif result["status"] == "skipped_cap":
         print(f"Skipped {result['town']}: monthly cap reached (${result['month_spent_cents'] / 100:.2f} spent).")
+    elif result["town"] in ("who decides", "board minutes"):
+        what = "who-decides answers" if result["town"] == "who decides" else "relevant meeting documents"
+        print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} {what}. "
+              f"CSV: {result.get('csv', '')}")
     elif "diff" in result:
         diff = result.get("diff") or {}
         print(f"{result['town']}: {result['status']}, ${result['cost_cents'] / 100:.2f}, {result['rows']} rows "
@@ -346,6 +354,14 @@ def main(argv: list[str] | None = None) -> int:
     weekly.add_argument("--time", default="03:00", help="task time, HH:MM 24-hour (default 03:00)")
     weekly.add_argument("--no-notices", action="store_true", help="skip the Pinal formation notices job")
     weekly.add_argument("--notices-only", action="store_true", help="run only the Pinal formation notices job")
+    weekly.add_argument("--no-minutes", action="store_true", help="skip the board-minutes job")
+    weekly.add_argument("--no-locality", action="store_true", help="skip the paid who-decides check")
+    who = commands.add_parser("who-decides", help="free: who decides (local, franchise, corporate...) for this "
+                                                  "week's call-this-week businesses, stored in donkey.db")
+    who.add_argument("--area", default="stephanie", help="area from areas.json")
+    who.add_argument("--no-npi", action="store_true", help="skip the free NPI registry lookups for clinics")
+    brands = commands.add_parser("import-brands", help="free: import chain brand names (Name Suggestion Index JSON)")
+    brands.add_argument("--file", required=True, help="nsi.json from github.com/osmlab/name-suggestion-index dist/")
     ovt = commands.add_parser("overture-snapshot", help="free: store Overture releases for an area and diff them")
     ovt.add_argument("--area", default="stephanie", help="area from areas.json (needs a bbox)")
     ovt.add_argument("--release", help="one release, e.g. 2026-09-23.0 (default: every release not yet stored)")
@@ -384,6 +400,9 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         jobs = ([] if args.notices_only else [lambda: runner.run_weekly(settings, town=args.town, dry_run=args.dry_run)])
         jobs += [] if args.no_notices else [lambda: runner.run_notices(settings, dry_run=args.dry_run)]
+        if not args.notices_only:  # who-decides last, so this week's new rows get checked
+            jobs += [] if args.no_minutes else [lambda: runner.run_minutes(settings, dry_run=args.dry_run)]
+            jobs += [] if args.no_locality else [lambda: runner.run_locality(settings, dry_run=args.dry_run)]
         failed = 0
         for job in jobs:  # one job failing never stops the other
             try:
@@ -392,6 +411,28 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"growth-weekly failed: {exc}", file=sys.stderr)
                 failed = 1
         return failed
+    if args.command in ("who-decides", "import-brands"):
+        from . import locality
+        from .triggers import call_this_week
+
+        try:
+            if args.command == "import-brands":
+                print(f"{locality.import_brands(args.file)} brands stored")
+                return 0
+            connect().close()
+            hits = call_this_week(args.area, days=14, min_score=0)
+            done = locality.check_rules(hits, npi=not args.no_npi)
+            for note in done["notes"]:
+                print(note, file=sys.stderr)
+            for hit in call_this_week(args.area, days=14, min_score=0):
+                answer = hit["locality"]
+                print(f"{answer['value']:<20} {hit['name']} ({hit['town'] or hit['zip']}): {answer['evidence']}"
+                      + (f" | owner: {answer['owner_hint']}" if answer["owner_hint"] else ""))
+            print(f"stored: {done['counts']}")
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"{args.command} failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "call-this-week":
         from .triggers import call_this_week
 
@@ -405,7 +446,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             for hit in hits:
                 where = hit["town"] or hit["zip"] or "location unknown"
-                print(f"{hit['score']:>3}  {hit['name']} ({where}): {'; '.join(hit['reasons'])}")
+                who = hit["locality"]["value"]
+                print(f"{hit['score']:>3}  {hit['name']} ({where}): {'; '.join(hit['reasons'])}"
+                      + ("" if who == "unknown" else f" [who decides: {who}]"))
             print(f"{len(hits)} to call")
         return 0
     if args.command.startswith("growth-"):

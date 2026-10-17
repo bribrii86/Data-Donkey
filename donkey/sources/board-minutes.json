@@ -1,0 +1,24 @@
+{
+  "id": "board-minutes",
+  "name": "Public board and council meeting documents",
+  "description": "Agendas and minutes from city and town councils, the county board, school district boards, colleges, fire districts and tribal councils (Arizona open meeting law makes them public). The weekly Console agent keeps only documents that mention office equipment, print, document management, IT, RFPs, cooperative contracts or budgets, with a one-line summary and a flag: intent_plus (plans to buy, RFP, contract ending), intent_minus (declined or deferred), vendor (names the current vendor or contract), info.",
+  "format": "csv",
+  "required": ["body_name", "event_date"],
+  "columns": {
+    "name": ["body_name"],
+    "city": ["town"],
+    "event_date": ["meeting_date"],
+    "doc_type": ["doc_type"],
+    "doc_url": ["doc_url"],
+    "flag": ["flag"],
+    "summary": ["summary"],
+    "keywords": ["keywords"],
+    "vendor": ["vendor"]
+  },
+  "event": {
+    "kind": "board_minutes",
+    "date": "event_date",
+    "town": "city",
+    "details": ["name", "doc_type", "doc_url", "flag", "summary", "keywords", "vendor"]
+  }
+}

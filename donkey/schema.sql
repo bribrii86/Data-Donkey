@@ -114,3 +114,41 @@ CREATE TABLE IF NOT EXISTS agent_runs (
     changes INTEGER,
     note TEXT
 );
+
+-- v0.6.0: who decides. One row per business (normalized name + ZIP, else + town): can it buy locally? Filled by the
+-- free rules (locality.classify), the NPI registry, the weekly Console agent, or by hand. details_json keeps the raw
+-- evidence (NPI records, the agent's row) so nothing learned is thrown away.
+CREATE TABLE IF NOT EXISTS locality (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    zip TEXT NOT NULL DEFAULT '',
+    town TEXT NOT NULL DEFAULT '',
+    value TEXT NOT NULL CHECK (value IN ('local', 'franchise', 'regional', 'corporate', 'central_procurement',
+                                         'unknown')),
+    evidence TEXT NOT NULL DEFAULT '',
+    confidence TEXT NOT NULL DEFAULT 'low' CHECK (confidence IN ('high', 'med', 'low')),
+    owner_hint TEXT NOT NULL DEFAULT '',
+    initiative TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL,
+    checked_at TEXT NOT NULL,
+    details_json TEXT NOT NULL DEFAULT '{}'
+);
+
+-- v0.6.0: Overture's brand field per place (13.7% of places in Stephanie's ZIPs carried one in release 2026-09-23.1).
+CREATE TABLE IF NOT EXISTS place_brands (
+    key TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    zip TEXT NOT NULL DEFAULT '',
+    brand TEXT NOT NULL,
+    wikidata TEXT NOT NULL DEFAULT '',
+    release TEXT NOT NULL DEFAULT ''
+);
+
+-- v0.6.0: chain and franchise brand names imported from open lists (OpenStreetMap Name Suggestion Index).
+CREATE TABLE IF NOT EXISTS brands (
+    normalized_name TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'chain',
+    wikidata TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL
+);

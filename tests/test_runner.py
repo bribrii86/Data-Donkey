@@ -71,6 +71,7 @@ def test_settings_from_env_file(tmp_path):
     settings = runner.load_settings({"DONKEY_AGENT_ID": "agent_env"}, home=tmp_path)
     assert settings["api_key"] == "from-file" and settings["agent_id"] == "agent_env"  # environment wins
     assert settings["monthly_cap_cents"] == 2500 and settings["run_cap_cents"] == 450
+    assert runner.load_settings({}, home=tmp_path / "empty")["monthly_cap_cents"] == 4000  # v0.6.0 default
     assert settings["area"] == "stephanie"
     with pytest.raises(ValueError, match="dollar amount"):
         runner.load_settings({"DONKEY_MONTHLY_CAP_USD": "lots"}, home=tmp_path)
@@ -122,12 +123,14 @@ def test_monthly_cap_limits_budget_then_skips(tmp_path):
     assert runner.month_spend(con) == 2350
     con.close()
 
+    capped = _settings(tmp_path, DONKEY_MONTHLY_CAP_USD="25")
     client = FakeClient({"x.csv": PAGE2}, cost="140")
-    assert _run(tmp_path, client, town="Maricopa")["budget_cents"] == 150  # $25 - $23.50 left
+    result = runner.run_weekly(capped, client, db_path=db, sleep=lambda s: None, town="Maricopa")
+    assert result["budget_cents"] == 150  # $25 - $23.50 left
     assert client.calls[0][3] == 150
 
     skipped = FakeClient({})
-    result = _run(tmp_path, skipped, town="Maricopa")
+    result = runner.run_weekly(capped, skipped, db_path=db, sleep=lambda s: None, town="Maricopa")
     assert result["status"] == "skipped_cap" and skipped.calls == []  # no API call at all
     con = connect(db)
     assert con.execute("SELECT status FROM agent_runs ORDER BY id DESC").fetchone()[0] == "skipped_cap"

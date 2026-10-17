@@ -244,3 +244,42 @@ monthly cap. A failure in one job
 never stops the other. `--no-notices` skips it; `--notices-only` runs only it; `--dry-run` prints both prompts.
 Known gap: a Pinal business whose statutory agent is in Maricopa or Pima publishes there (no address on that list),
 so it is missed here.
+
+## Who decides and board minutes (v0.6.0)
+
+Stephanie drops a business at once when it can't buy office equipment locally, so every call-this-week row now
+carries `locality`: `value` (local, franchise, regional, corporate, central_procurement, unknown), `evidence`,
+`confidence`, `owner_hint` (likely decision maker), `initiative` and `source`, plus `board_note` (latest public
+meeting notes for a public body). Stored in the `locality` table, keyed by normalized name + ZIP (else town), with
+the raw evidence in `details_json`; an answer is reused for 90 days (`locality.CACHE_DAYS`).
+
+Free tier (`python -m donkey who-decides`, also run inside the weekly job):
+- public bodies by name (city, county, school district, college, tribal, fire, courts, USPS): central_procurement;
+- `donkey/brands.json`: hand-kept corporate and franchise brands (seeded from the brands Overture lists in
+  Stephanie's ZIPs). `python -m donkey import-brands --file nsi.json` adds the OpenStreetMap Name Suggestion Index
+  as plain chains. One-word and imported brands only match with a store word or number after them
+  ("Target Pest Control" is not Target), unless Overture's brand field agrees;
+- Overture's brand field per place (`place_brands`, saved with each release; re-run
+  `overture-snapshot --release NAME` to backfill a stored release): 13.7% of the 5,778 places in her ZIPs had one in
+  2026-09-23.1, and it is noisy, so alone it only gives regional/low;
+- places in the area sharing the name: 3+ regional, 8+ corporate;
+- the free NPI registry for clinics the rules leave unknown: same legal name at 3+ Arizona locations or a subpart is
+  regional, 8+ corporate; an authorized official titled owner/president/DDS/MD with 1-2 locations is local, and the
+  official becomes the owner hint.
+On all 5,778 places in her ZIPs the rules alone settled 23% (531 corporate, 246 franchise, 359 regional, 221 public).
+
+Paid tier (`runner.run_locality`, weekly, own cap `DONKEY_LOCALITY_CAP_USD`, default $5; at most
+`DONKEY_LOCALITY_MAX_ROWS`, default 60): one Console agent session for this week's rows that are still unknown or
+older than 90 days. It reads the site footer, About and Locations pages, searches for a parent, checks the ACC record
+(principals; a law-firm or agent-service statutory agent is never the buyer) and notes any public initiative. Its CSV
+is kept in `runs/DATE-who-decides/`.
+
+Board minutes (`runner.run_minutes`, weekly, own cap `DONKEY_MINUTES_CAP_USD`, default $3): reads the public-body
+list at `DONKEY_BODIES_FILE` (default `~/DataDonkey/bodies.csv`, the researcher's decision_bodies CSV: body_name,
+body_type, zip_or_area, portal_platform, agendas_url, minutes_url). No list, no run. The agent keeps agenda items about
+copiers, print, document management, IT, phones, RFPs, co-op contracts and related budgets, flagged intent_plus
+(4 points), vendor (3), intent_minus or info (0, shown as a reason only). Stored as `board_minutes` events (source map
+`board-minutes`, repeats dropped by link + summary) and scored for 45 days.
+
+The monthly cap default is now $40 (Buck approved the two new jobs 2026-10-17). `growth-weekly --no-minutes` and
+`--no-locality` skip them.
