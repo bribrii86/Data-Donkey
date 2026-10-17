@@ -70,12 +70,12 @@ def fetch_rows(release: str, area: dict) -> list[dict[str, str]]:  # pragma: no 
     src = f"s3://{BUCKET}/release/{release}/theme=places/type=place/*"
     sql = (
         "SELECT names.primary, addresses[1].freeform, addresses[1].locality, left(addresses[1].postcode, 5), "  # nosec B608
-        "phones[1], websites[1], coalesce(basic_category, taxonomy.primary) "
+        "phones[1], websites[1], coalesce(basic_category, taxonomy.primary), brand.names.primary, brand.wikidata "
         f"FROM read_parquet('{src}') "
         f"WHERE bbox.xmin BETWEEN {box[0]} AND {box[1]} AND bbox.ymin BETWEEN {box[2]} AND {box[3]} "
         "AND names.primary IS NOT NULL AND coalesce(operating_status, 'open') <> 'permanently_closed'"
     )
-    keys = ("name", "street", "city", "zip", "phone", "website", "category")
+    keys = ("name", "street", "city", "zip", "phone", "website", "category", "brand", "wikidata")
     return [dict(zip(keys, ("" if v is None else str(v) for v in row))) for row in _duckdb().execute(sql).fetchall()]
 
 
@@ -97,12 +97,30 @@ def snapshot_release(
         writer = csv.DictWriter(stream, fieldnames=COLUMNS)
         writer.writeheader()
         writer.writerows({**{k: r.get(k, "") for k in growth.FIELDS}, "date_seen": day} for r in rows)
+    _save_brands(rows, release, db_path)
     snapshot = growth.take_snapshot(out, f"overture {area}", day, db_path=db_path)
     # Dated the day we saved it (not the release day), so changes land in this week's call-this-week window.
     saved = (today or date.today()).isoformat()
     diff = None if snapshot["duplicate"] else growth.diff_snapshots(
         new_id=snapshot["snapshot_id"], db_path=db_path, event_date=saved, scores=SCORES)
     return {"release": release, "area": area, "rows": len(rows), "csv": str(out), "snapshot": snapshot, "diff": diff}
+
+
+def _save_brands(rows: list[dict[str, str]], release: str, db_path: str | Path | None) -> int:
+    """Overture's brand field per place (v0.6.0), for who-decides. Latest release wins."""
+    from .locality import key  # imported here: locality imports ingest, like this module
+
+    branded = [r for r in rows if r.get("brand")]
+    con = connect(db_path)
+    try:
+        con.executemany("INSERT OR REPLACE INTO place_brands (key, name, zip, brand, wikidata, release) "
+                        "VALUES (?, ?, ?, ?, ?, ?)",
+                        [(key(r["name"], r.get("zip", "")), r["name"], r.get("zip", ""), r["brand"],
+                          r.get("wikidata", ""), release) for r in branded])
+        con.commit()
+    finally:
+        con.close()
+    return len(branded)
 
 
 def snapshot_new(
