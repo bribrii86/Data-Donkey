@@ -5,7 +5,15 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-12)
+## Current state (2026-10-17)
+- v0.6.0: who decides + board minutes (Buck 2026-10-17 17:54 UTC approved; research write-up in the project files
+  research/decision_locality.md). Every call-this-week row carries `locality` (local, franchise, regional, corporate,
+  central_procurement, unknown + evidence, confidence, owner_hint, initiative, source) and `board_note`. Free tier
+  `donkey/locality.py` (public-body names, brands.json, Overture brand field now saved per place, same-name counts,
+  NPI registry) settled 23% of the 5,778 places in her ZIPs. Paid weekly jobs: who-decides agent for unknown rows
+  ($5 cap, 60 rows, 90-day cache) and board minutes from ~/DataDonkey/bodies.csv ($3 cap; board_minutes events score
+  intent_plus 4, vendor 3). Monthly cap default $25 -> $40. New CLI: who-decides, import-brands. Needs bodies.csv
+  (Buck's cloud researcher builds it) before the minutes job runs.
 - v0.5.8: kiosk filter. call-this-week skips self-serve machines inside other stores (ATMs, Coinme/Coinstar/bitcoin
   kiosks, Redbox, ecoATM, Amazon Lockers, KeyMe; `triggers.looks_like_kiosk`, growth rows only; names with a company
   or service word like "ATM Repair LLC" still score). Buck 2026-10-12 20:19

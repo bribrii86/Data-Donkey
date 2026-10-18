@@ -23,4 +23,4 @@ packages = ["donkey"]
 version = { attr = "donkey.__version__" }
 
 [tool.setuptools.package-data]
-donkey = ["schema.sql", "areas.json", "sources/*.json"]
+donkey = ["schema.sql", "areas.json", "brands.json", "sources/*.json"]

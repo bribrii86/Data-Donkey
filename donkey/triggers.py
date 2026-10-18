@@ -1,7 +1,9 @@
 """Call this week: one ranked list per area from every trigger Data Donkey holds, for the Monday list.
 
 Sources today: growth_* events (snapshot diffs), ucc_filing events (new financing, and copier leases nearing their
-estimated end), sba_loan events and new_llc events (Pinal County formation notices). Apps add their own triggers (permits, new licenses) by passing scorer functions, so nothing here has
+estimated end), sba_loan events, new_llc events (Pinal County formation notices) and board_minutes events (public
+meeting documents about office equipment, print, IT or a related RFP or budget). Every business also gets a
+who-decides answer (donkey.locality) under "locality". Apps add their own triggers (permits, new licenses) by passing scorer functions, so nothing here has
 to change when a new source arrives."""
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from datetime import date, timedelta
 from pathlib import Path
 from typing import Callable, Iterable
 
-from . import areas, ucc
+from . import areas, locality, ucc
 from .common import database_path, parse_date
 from .common import norm as _norm
 
@@ -29,9 +31,14 @@ SCORES = {
     "sba_loan": 3,  # SBA 7(a)/504 loan approved within SBA_LOOKBACK_DAYS: financing to grow or buy a business
     "new_llc": 3,  # new LLC or corporation formed within NEW_LLC_LOOKBACK_DAYS: setting up an office now
     "new_llc_agent": 3,  # same, but the notice only gives the statutory agent's address (often a lawyer's office)
+    "board_intent_plus": 4,  # a public body plans to buy, opened an RFP, or has a contract or lease ending
+    "board_vendor": 3,  # a public body named its current vendor or contract terms
+    "board_intent_minus": 0,  # declined or tabled a purchase: shown as a reason, never a reason to call
+    "board_info": 0,
 }
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
+BOARD_LOOKBACK_DAYS = 45  # boards move slowly; a vote or RFP stays worth acting on for weeks
 NEW_LLC_LOOKBACK_DAYS = 60  # the notice runs up to 60 days after approval, so the formation date is already weeks old
 # LLCs named after a street address ("408 N. Sacaton Street LLC") or called holdings are usually a building's owner,
 # not a business that will set up an office; they stay in the store but don't score.
@@ -65,6 +72,10 @@ REASONS = {
     "sba_loan": "SBA loan approved",
     "new_llc": "new business formed (formation notice)",
     "new_llc_agent": "new business formed (formation notice; address is the statutory agent's, look it up first)",
+    "board_intent_plus": "board meeting: plans to buy or contract ending",
+    "board_vendor": "board meeting named their vendor or contract",
+    "board_intent_minus": "board meeting: purchase declined or tabled",
+    "board_info": "board meeting mentioned equipment or IT",
 }
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
@@ -178,6 +189,22 @@ def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
                "address_type": details.get("address_type", ""), "newspaper": details.get("newspaper", "")}
 
 
+def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+    start = (as_of - timedelta(days=BOARD_LOOKBACK_DAYS)).isoformat()
+    rows = con.execute("SELECT * FROM events WHERE kind = 'board_minutes' AND event_date >= ? AND event_date <= ?",
+                       (start, as_of.isoformat()))
+    for row in rows:
+        details = json.loads(row["details_json"])
+        if area and not areas.contains(area, details.get("zip", ""), row["town"] or ""):
+            continue  # no town or ZIP inside the area: not shown (the body list should be the territory's)
+        signal = f"board_{details.get('flag') or 'info'}"
+        if signal not in SCORES:
+            signal = "board_info"
+        yield {"name": details.get("name", ""), "zip": details.get("zip", ""), "town": row["town"] or "", "score": SCORES[signal],
+               "signal": signal, "date": row["event_date"], "summary": details.get("summary", ""),
+               "doc_url": details.get("doc_url", ""), "vendor": details.get("vendor", "")}
+
+
 def call_this_week(
     area: str | None = None,
     as_of: str | date | None = None,
@@ -197,12 +224,27 @@ def call_this_week(
     con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, _new_llc_hits, *scorers) for hit in scorer(con, area_def, today, since)]
+        board = list(_board_hits(con, area_def, today, since))
+        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, _new_llc_hits, *scorers)
+                for hit in scorer(con, area_def, today, since)] + board
+        ranked = _rank(hits, min_score)
+        for item, answer in zip(ranked, locality.for_items(ranked, con, today)):
+            item["locality"] = answer
+            notes = [h for h in board if _norm(h["name"]) == _norm(item["name"])]
+            item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
+                notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
     finally:
         con.close()
+    return ranked
+
+
+def _rank(hits: list[dict], min_score: int) -> list[dict]:
     totals: dict[str, dict] = {}
-    for hit in hits:
-        item = totals.setdefault(_key(hit["name"], hit["zip"]), {
+    for hit in sorted(hits, key=lambda h: not h["zip"]):  # rows with a ZIP first, so a board hit can join one
+        key = _key(hit["name"], hit["zip"])
+        if not hit["zip"]:  # a board document with no ZIP: join the same public body already listed
+            key = next((k for k in totals if k.split("|")[0] == _norm(hit["name"])), key)
+        item = totals.setdefault(key, {
             "name": hit["name"], "zip": hit["zip"], "town": hit["town"], "score": 0, "signals": [], "reasons": [],
             "last_date": "", "details": [],
         })
