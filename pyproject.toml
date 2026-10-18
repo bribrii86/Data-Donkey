@@ -12,6 +12,7 @@ dependencies = []  # standard library only
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff", "bandit", "pip-audit", "build"]
 overture = ["duckdb"]  # only for overture-snapshot; Sales-Pilot installs it already
+crawl = ["crawl4ai"]  # only for crawl-ab (v0.6.1); then run crawl4ai-setup once
 
 [project.scripts]
 donkey = "donkey.ingest:main"

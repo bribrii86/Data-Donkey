@@ -298,6 +298,30 @@ def _overture_line(result: dict[str, Any]) -> str:
     return f"Overture {result['release']} ({result['area']}): {result['rows']} places; {change}"
 
 
+def _print_ab(result: dict[str, Any]) -> None:
+    agent = result.get("agent") or {}
+    print(f"{result['town']}: {result['pages']} pages ({result['pages_skipped']} skipped), "
+          f"{result['html_chars']:,} HTML chars -> {result['markdown_chars']:,} Markdown chars, model {result['model']}")
+    print(f"Agent run {agent.get('started_at') or 'none found'}: ${(agent.get('cost_cents') or 0) / 100:.2f}, "
+          f"{agent.get('rows') or 0} rows" + (f", usage {agent['usage']}" if agent.get("usage") else ""))
+    if result["status"] == "dry_run":
+        print(f"Dry run: worst case ${result['worst_case_cents'] / 100:.2f}, budget ${result['budget_cents'] / 100:.2f}")
+        for page in result["page_list"]:
+            print(f"  {page['status']} {page['markdown_chars']:>8,} {page['url']} {page['skipped']}")
+        return
+    if result["status"] == "skipped_cap":
+        print("Skipped: monthly cap reached")
+        return
+    crawl, cmp = result["crawl"], result["compare"]
+    print(f"Crawl4AI: ${crawl['cost_cents'] / 100:.2f}, {crawl['calls']} calls, {crawl['input_tokens']:,} in / "
+          f"{crawl['output_tokens']:,} out tokens, {crawl['rows']} rows" + (f"; {crawl['stopped']}" if crawl["stopped"] else ""))
+    print(f"Businesses: agent {cmp['agent_businesses']}, crawl {cmp['crawl_businesses']}, both {cmp['both']}, "
+          f"only agent {cmp['only_agent']}, only crawl {cmp['only_crawl']}")
+    print(f"With phone: agent {cmp['agent_with_phone']}, crawl {cmp['crawl_with_phone']}. "
+          f"With street: agent {cmp['agent_with_street']}, crawl {cmp['crawl_with_street']}")
+    print(f"Report: {result['report']}  CSV: {result['csv']}")
+
+
 def _print_weekly(result: dict[str, Any]) -> None:
     if result["status"] in ("nothing_to_check", "no_bodies"):
         free = (result.get("free") or {}).get("counts")
@@ -362,6 +386,12 @@ def main(argv: list[str] | None = None) -> int:
     who.add_argument("--no-npi", action="store_true", help="skip the free NPI registry lookups for clinics")
     brands = commands.add_parser("import-brands", help="free: import chain brand names (Name Suggestion Index JSON)")
     brands.add_argument("--file", required=True, help="nsi.json from github.com/osmlab/name-suggestion-index dist/")
+    ab = commands.add_parser("crawl-ab", help="paid, capped: Crawl4AI fetch + Claude extraction on one town's pages, "
+                                              "compared with the agent's last run (weekly job unchanged)")
+    ab.add_argument("--town", required=True, help="town the agent already ran, e.g. Maricopa")
+    ab.add_argument("--urls", help="file of page URLs, one per line (default: the agent run's source_url pages)")
+    ab.add_argument("--dry-run", action="store_true", help="fetch pages (free) and show sizes and worst-case cost")
+    ab.add_argument("--agent-usage", action="store_true", help="also ask the Console for the agent session's tokens")
     ovt = commands.add_parser("overture-snapshot", help="free: store Overture releases for an area and diff them")
     ovt.add_argument("--area", default="stephanie", help="area from areas.json (needs a bbox)")
     ovt.add_argument("--release", help="one release, e.g. 2026-09-23.0 (default: every release not yet stored)")
@@ -379,6 +409,19 @@ def main(argv: list[str] | None = None) -> int:
             print(_overture_line(result))
         if not results:
             print("No new Overture release; nothing to do.")
+        return 0
+    if args.command == "crawl-ab":
+        from . import crawl, runner
+
+        try:
+            settings = runner.load_settings()
+            console = (runner.ConsoleClient(settings["api_key"], settings["home"] / "logs" / "console-calls.jsonl")
+                       if args.agent_usage else None)
+            result = crawl.run_ab(settings, args.town, args.urls, args.dry_run, console=console)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            print(f"crawl-ab failed: {exc}", file=sys.stderr)
+            return 1
+        _print_ab(result)
         return 0
     if args.command == "growth-weekly":
         from . import runner
