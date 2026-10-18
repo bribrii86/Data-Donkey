@@ -26,6 +26,7 @@ from typing import Any, Callable, Protocol
 
 from . import areas, growth
 from .common import DEFAULT_DB
+from .common import norm as _norm
 from .ingest import connect, ingest
 
 __all__ = ["ConsoleClient", "Settings", "load_settings", "pick_town", "run_weekly", "run_notices", "run_locality",
@@ -46,6 +47,7 @@ LOCALITY_COLUMNS = ("key", "name", "zip", "decision_locality", "evidence", "conf
                     "initiative", "source_url")
 MINUTES_LABEL = "board minutes"  # agent_runs.town for the meeting-documents job
 MINUTES_COLUMNS = ("body_name", "town", "meeting_date", "doc_type", "doc_url", "flag", "summary", "keywords", "vendor")
+MINUTES_STORED = (*MINUTES_COLUMNS, "zip")  # zip comes from the body list, not the agent
 MINUTES_DAYS = 10
 BODY_COLUMNS = ("body_name", "body_type", "zip_or_area", "portal_platform", "agendas_url", "minutes_url")
 
@@ -133,7 +135,7 @@ budget item for any of these. Read the relevant section, not just the title.
 
 Write one row per relevant agenda item to /mnt/session/outputs/minutes-NN.csv (NN = 01, 02, ...), columns in order:
 {columns}
-- body_name and town: from the list. meeting_date: YYYY-MM-DD. doc_type: agenda, minutes or packet.
+- body_name: exactly as in the list. town: the town the body serves. meeting_date: YYYY-MM-DD. doc_type: agenda, minutes or packet.
 - doc_url: the document link. vendor: a vendor or contract named, else blank.
 - flag, exactly one of: intent_plus (plans to buy, an RFP, a contract or lease ending, money approved),
   intent_minus (declined, tabled or deferred a purchase), vendor (names the current vendor or contract terms), info.
@@ -276,7 +278,7 @@ def load_settings(env: dict[str, str] | None = None, home: Path | None = None) -
         notices_cap_cents=_cents(merged.get("DONKEY_NOTICES_CAP_USD", "1.50"), "DONKEY_NOTICES_CAP_USD"),
         locality_cap_cents=_cents(merged.get("DONKEY_LOCALITY_CAP_USD", "5"), "DONKEY_LOCALITY_CAP_USD"),
         minutes_cap_cents=_cents(merged.get("DONKEY_MINUTES_CAP_USD", "3"), "DONKEY_MINUTES_CAP_USD"),
-        locality_max_rows=int(merged.get("DONKEY_LOCALITY_MAX_ROWS", "60")),
+        locality_max_rows=max(0, int(merged.get("DONKEY_LOCALITY_MAX_ROWS", "60"))),
         bodies_file=Path(merged.get("DONKEY_BODIES_FILE") or home / "bodies.csv"),
         area=merged.get("DONKEY_RUN_AREA", "stephanie"),
         timeout_minutes=int(merged.get("DONKEY_RUN_TIMEOUT_MINUTES", "90")),
@@ -596,8 +598,17 @@ def run_locality(
     prompt = LOCALITY_PROMPT.format(columns=",".join(LOCALITY_COLUMNS),
                                     rows=_csv_text(todo, ("key", "name", "town", "zip", "reasons")))
 
+    by_name = {locality.key(item["name"], item["zip"]): item["key"] for item in todo}
+
     def finish(blobs: list[tuple[str, bytes]], day: str) -> dict[str, Any]:
-        rows = [r for r in _read_csvs(blobs, LOCALITY_COLUMNS) if r["key"] in by_key]
+        rows, dropped = [], 0
+        for row in _read_csvs(blobs, LOCALITY_COLUMNS):
+            if row["key"] not in by_key:  # the agent re-typed the key: match on name + ZIP instead
+                row["key"] = by_name.get(locality.key(row["name"], row["zip"]), "")
+            if row["key"] in by_key:
+                rows.append(row)
+            else:
+                dropped += 1  # not a row we sent (or unrecognisable): never stored
         out = settings["home"] / "runs" / f"{day}-who-decides" / "who-decides.csv"
         _write_csv(rows, out, LOCALITY_COLUMNS)
         stored = 0
@@ -618,7 +629,7 @@ def run_locality(
             con.commit()
         finally:
             con.close()
-        return {"rows": stored, "csv": str(out)}
+        return {"rows": stored, "dropped": dropped, "csv": str(out)}
 
     con = connect(db_path)
     try:
@@ -679,15 +690,28 @@ def run_minutes(
                                    bodies=_csv_text(bodies, ("body_name", "body_type", "zip_or_area", "agendas_url",
                                                              "minutes_url")))
 
+    listed = {_norm(body["body_name"]): body for body in bodies}
+
     def finish(blobs: list[tuple[str, bytes]], day: str) -> dict[str, Any]:
         seen = _seen_docs(db_path)
-        rows = []
+        rows, dropped = [], 0
         for _, blob in sorted(blobs):
             for raw in csv.DictReader(io.StringIO(blob.decode("utf-8-sig", "replace"))):
                 lower = {str(k).strip().casefold(): (v or "").strip() for k, v in raw.items() if k}
                 row = {column: lower.get(column, "") for column in MINUTES_COLUMNS}
-                if not row["body_name"] or not row["meeting_date"]:
+                body = listed.get(_norm(row["body_name"]))
+                if body is None or not row["meeting_date"]:  # only bodies on Buck's list (his territory)
+                    dropped += 1
                     continue
+                row["body_name"] = body["body_name"]
+                area_hint = body["zip_or_area"]
+                row["zip"] = (re.findall(r"\b\d{5}\b", area_hint) or [""])[0]
+                if not row["town"] and area_hint and not row["zip"]:
+                    row["town"] = area_hint
+                # scraped text ends up in the rep's spreadsheet and her Claude: keep it short
+                for field, limit in (("summary", 300), ("doc_url", 500), ("keywords", 200), ("vendor", 120),
+                                     ("town", 60)):
+                    row[field] = row[field][:limit]
                 doc = _doc_key(row["doc_url"], row["summary"])
                 if doc in seen:
                     continue
@@ -696,9 +720,9 @@ def run_minutes(
                     "intent_plus", "intent_minus", "vendor", "info") else "info"
                 rows.append(row)
         out = settings["home"] / "runs" / f"{day}-board-minutes" / "board-minutes.csv"
-        _write_csv(rows, out, MINUTES_COLUMNS)
+        _write_csv(rows, out, MINUTES_STORED)
         stored = ingest("board-minutes", out, "Console agent: weekly board minutes", db_path) if rows else None
-        return {"rows": len(rows), "csv": str(out), "ingest": stored}
+        return {"rows": len(rows), "dropped": dropped, "csv": str(out), "ingest": stored}
 
     con = connect(db_path)
     try:

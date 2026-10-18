@@ -39,11 +39,12 @@ CORPORATE_COUNT = 8
 
 # Public bodies buy through budgets, boards, RFPs and co-op contracts. They stay on the list (Buck 2026-10-12).
 _PUBLIC = re.compile(
-    r"\b(city of|town of|county|school district|unified|\busd\b|public schools?|elementary school|middle school|"
-    r"high school|junior high|community college|college|university|tribal|indian community|nation|department of|"
+    r"\b(city of|town of|county of|pinal county|maricopa county|county (government|offices?|department|board|"
+    r"attorney|assessor|recorder|treasurer|health|public health|planning|library)|school district|unified|\busd\b|public schools?|elementary school|middle school|"
+    r"high school|junior high|community college|college|university|tribal|indian community|o'odham nation|apache nation|navajo nation|department of|"
     r"dept of|state of arizona|arizona department|fire district|fire department|fire dept|library district|"
     r"police|sheriff|justice court|superior court|municipal court|court house|courthouse|irrigation district|"
-    r"water district|sanitary district|housing authority|post office|postal service|usps|federal|"
+    r"water district|sanitary district|housing authority|post office|postal service|usps|federal (building|courthouse|government|prison)|"
     r"social security|motor vehicle division|mvd|veterans affairs|national guard|state prison|prison|"
     r"correctional|department of corrections)\b", re.IGNORECASE)
 _NOT_PUBLIC = re.compile(r"\b(credit union|bank|insurance|realty|title agency|law (office|firm)|attorneys?)\b",
@@ -242,14 +243,16 @@ def stale_or_unknown(row: dict[str, Any] | None, today: date) -> bool:
 
 
 def _name_counts(con: sqlite3.Connection) -> Counter:
-    """Places per normalized name in the latest snapshot of each list (Overture and the weekly town lists)."""
+    """Distinct places (name + street) per normalized name across the latest snapshot of each list, so one shop seen
+    in several lists (Overture area, a wider area, a weekly town list) counts once."""
     try:
         rows = con.execute(
-            """SELECT snapshot_rows.name FROM snapshot_rows JOIN (SELECT label, MAX(id) AS id FROM snapshots
-            GROUP BY label) latest ON latest.id = snapshot_rows.snapshot_id""").fetchall()
+            """SELECT snapshot_rows.name, snapshot_rows.street FROM snapshot_rows JOIN (SELECT label, MAX(id) AS id
+            FROM snapshots GROUP BY label) latest ON latest.id = snapshot_rows.snapshot_id""").fetchall()
     except sqlite3.OperationalError:
         return Counter()
-    return Counter(_norm(row[0]) for row in rows if row[0])
+    places = {(_norm(row[0]), re.sub(r"[^0-9a-z]", "", (row[1] or "").casefold())) for row in rows if row[0]}
+    return Counter(name for name, _ in places)
 
 
 def _place_brand(con: sqlite3.Connection, name: str, zip_code: str) -> str:

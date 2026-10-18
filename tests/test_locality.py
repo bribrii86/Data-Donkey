@@ -48,6 +48,9 @@ def test_free_rules():
     # ...unless Overture tags the place with that brand
     assert value("Freddy's Frozen Custard & Steakburgers", brand="Freddy's") == "franchise"
     assert value("Copper Mesa Dental") == "unknown"
+    # review fix: generic words alone don't make a public body
+    assert value("Federal Express") == value("County Line Feed") == value("Joe's Nation Auto") == "unknown"
+    assert value("Pinal County Planning") == value("Tohono O'odham Nation Health") == "central_procurement"
     assert value("Copper Mesa Dental", locations=3) == "regional"
     assert value("Copper Mesa Dental", locations=9) == "corporate"
     answer = locality.classify("Walmart", brands=brands)
@@ -111,10 +114,12 @@ def test_locality_agent_checks_only_unknown_rows_then_caches(tmp_path):
     answer = ("key,name,zip,decision_locality,evidence,confidence,owner_hint,owner_source,initiative,source_url\n"
               f"{key},Gudelia LLC,85122,regional,Site lists 3 Pinal offices,med,Maria Gudelia,ACC member,"
               "Opening a Maricopa office,https://gudelia.test\n"
-              "not-a-key,Injected Row,85122,corporate,x,high,,,,\n").encode()
+              "not-a-key,Injected Row,85122,corporate,x,high,,,,\n"
+              "PATHMAKER-key-retyped,Pathmaker Strategies LLC,85122,local,owner on site,med,,,,\n").encode()
     client = FakeClient({"locality-01.csv": answer}, cost="80")
     result = runner.run_locality(_settings(tmp_path), client, db_path=db, sleep=lambda s: None, npi_fetch=_npi([]))
-    assert result["status"] == "done" and result["checked"] == 2 and result["rows"] == 1  # Walmart settled free
+    # Walmart settled free; Pathmaker's re-typed key is matched on name + ZIP; the injected row is dropped
+    assert result["status"] == "done" and result["checked"] == 2 and result["rows"] == 2 and result["dropped"] == 1
     message = client.calls[1][1]
     assert "Gudelia LLC" in message and "Pathmaker" in message and "Walmart" not in message
     assert client.calls[0][3] == 500  # own $5 cap
@@ -124,10 +129,11 @@ def test_locality_agent_checks_only_unknown_rows_then_caches(tmp_path):
     assert got["owner_hint"] == "Maria Gudelia (ACC member)" and got["initiative"] == "Opening a Maricopa office"
     assert "Injected Row" not in hits
 
-    # Pathmaker came back without an answer: still unknown, so it is asked again; Gudelia is cached
+    assert hits["Pathmaker Strategies LLC"]["locality"]["value"] == "local"
+    # both answered by the agent and cached: nothing to pay for next week
     second = FakeClient({}, cost="10")
     result = runner.run_locality(_settings(tmp_path), second, db_path=db, sleep=lambda s: None, npi_fetch=_npi([]))
-    assert result["checked"] == 1 and "Gudelia" not in second.calls[1][1]
+    assert result["status"] == "nothing_to_check" and second.calls == []
 
 
 def test_locality_nothing_to_check_spends_nothing(tmp_path):
@@ -159,7 +165,8 @@ def test_minutes_become_board_events_scored_once(tmp_path):
     db = tmp_path / "donkey.db"
     client = FakeClient({"minutes-01.csv": MINUTES}, cost="120")
     result = runner.run_minutes(_settings(tmp_path), client, db_path=db, sleep=lambda s: None)
-    assert result["status"] == "done" and result["rows"] == 2 and result["bodies"] == 1
+    # only bodies on the list are kept: City of Florence isn't on it, and a row without a body name is dropped
+    assert result["status"] == "done" and result["rows"] == 1 and result["dropped"] == 2 and result["bodies"] == 1
     assert client.calls[0][3] == 300 and "board.test/a" in client.calls[1][1] and "No Links" not in client.calls[1][1]
     hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY, db_path=db)}
     board = hits["Casa Grande Elementary School District"]
@@ -222,3 +229,37 @@ def test_who_decides_cli_and_weekly_dry_run(tmp_path, monkeypatch, capsys):
     assert main(["growth-weekly", "--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "board minutes: nothing for the paid check" in out and "who decides" in out and "Gudelia LLC" in out
+
+
+def test_out_of_area_board_documents_are_not_listed(tmp_path):
+    (tmp_path / "bodies.csv").write_text(
+        "body_name,body_type,zip_or_area,portal_platform,agendas_url,minutes_url\n"
+        "Apache Junction Unified School District,school district,85120,BoardDocs,https://aj.test/a,\n",
+        encoding="utf8")
+    rows = (f"body_name,town,meeting_date,doc_type,doc_url,flag,summary,keywords,vendor\n"
+            f"Apache Junction Unified School District,,{EFFECTIVE},minutes,https://aj.test/d,intent_plus,"
+            f"Copier RFP {'x' * 400},copier,\n").encode()
+    db = tmp_path / "donkey.db"
+    result = runner.run_minutes(_settings(tmp_path), FakeClient({"minutes-01.csv": rows}), db_path=db,
+                                sleep=lambda s: None)
+    assert result["rows"] == 1
+    con = connect(db)
+    details = json.loads(con.execute("SELECT details_json FROM events WHERE kind = 'board_minutes'").fetchone()[0])
+    con.close()
+    assert details["zip"] == "85120" and len(details["summary"]) == 300
+    assert "Apache Junction Unified School District" not in {
+        h["name"] for h in api.call_this_week("stephanie", as_of=TODAY, db_path=db)}
+
+
+def test_one_shop_in_several_lists_counts_once(tmp_path):
+    from donkey import growth
+
+    db = tmp_path / "donkey.db"
+    row = "Copper Mesa Dental,9 W Main St,Casa Grande,85122,,,Dentist,2026-10-01\n"
+    for label in ("overture stephanie", "overture pinal", "weekly Casa Grande"):
+        path = tmp_path / f"{label}.csv"
+        path.write_text("name,street,city,zip,phone,website,category,date_seen\n" + row, encoding="utf8")
+        growth.take_snapshot(path, label, db_path=db)
+    con = connect(db)
+    assert locality._name_counts(con)["copper mesa dental"] == 1
+    con.close()

@@ -7,6 +7,7 @@
   "columns": {
     "name": ["body_name"],
     "city": ["town"],
+    "zip": ["zip"],
     "event_date": ["meeting_date"],
     "doc_type": ["doc_type"],
     "doc_url": ["doc_url"],
@@ -19,6 +20,6 @@
     "kind": "board_minutes",
     "date": "event_date",
     "town": "city",
-    "details": ["name", "doc_type", "doc_url", "flag", "summary", "keywords", "vendor"]
+    "details": ["name", "zip", "doc_type", "doc_url", "flag", "summary", "keywords", "vendor"]
   }
 }

@@ -195,8 +195,8 @@ def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: 
                        (start, as_of.isoformat()))
     for row in rows:
         details = json.loads(row["details_json"])
-        if area and row["town"] and not areas.contains(area, "", row["town"]):
-            continue
+        if area and not areas.contains(area, details.get("zip", ""), row["town"] or ""):
+            continue  # no town or ZIP inside the area: not shown (the body list should be the territory's)
         signal = f"board_{details.get('flag') or 'info'}"
         if signal not in SCORES:
             signal = "board_info"
