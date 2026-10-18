@@ -200,7 +200,7 @@ def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: 
         signal = f"board_{details.get('flag') or 'info'}"
         if signal not in SCORES:
             signal = "board_info"
-        yield {"name": details.get("name", ""), "zip": "", "town": row["town"] or "", "score": SCORES[signal],
+        yield {"name": details.get("name", ""), "zip": details.get("zip", ""), "town": row["town"] or "", "score": SCORES[signal],
                "signal": signal, "date": row["event_date"], "summary": details.get("summary", ""),
                "doc_url": details.get("doc_url", ""), "vendor": details.get("vendor", "")}
 
@@ -242,7 +242,7 @@ def _rank(hits: list[dict], min_score: int) -> list[dict]:
     totals: dict[str, dict] = {}
     for hit in sorted(hits, key=lambda h: not h["zip"]):  # rows with a ZIP first, so a board hit can join one
         key = _key(hit["name"], hit["zip"])
-        if not hit["zip"]:  # a board document has no ZIP: join the same public body already listed
+        if not hit["zip"]:  # a board document with no ZIP: join the same public body already listed
             key = next((k for k in totals if k.split("|")[0] == _norm(hit["name"])), key)
         item = totals.setdefault(key, {
             "name": hit["name"], "zip": hit["zip"], "town": hit["town"], "score": 0, "signals": [], "reasons": [],

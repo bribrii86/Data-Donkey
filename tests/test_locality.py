@@ -249,6 +249,9 @@ def test_out_of_area_board_documents_are_not_listed(tmp_path):
     assert details["zip"] == "85120" and len(details["summary"]) == 300
     assert "Apache Junction Unified School District" not in {
         h["name"] for h in api.call_this_week("stephanie", as_of=TODAY, db_path=db)}
+    listed = [h for h in api.call_this_week(None, as_of=TODAY, db_path=db)
+              if h["name"] == "Apache Junction Unified School District"]
+    assert listed and listed[0]["zip"] == "85120"  # the body's ZIP rides on the row, so who-decides can key on it
 
 
 def test_one_shop_in_several_lists_counts_once(tmp_path):

@@ -17,6 +17,7 @@ import sqlite3
 import subprocess  # nosec B404
 import sys
 import time
+from collections import Counter
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -598,7 +599,9 @@ def run_locality(
     prompt = LOCALITY_PROMPT.format(columns=",".join(LOCALITY_COLUMNS),
                                     rows=_csv_text(todo, ("key", "name", "town", "zip", "reasons")))
 
-    by_name = {locality.key(item["name"], item["zip"]): item["key"] for item in todo}
+    names = Counter(locality.key(item["name"], item["zip"]) for item in todo)
+    by_name = {locality.key(item["name"], item["zip"]): item["key"] for item in todo  # an ambiguous name never guesses
+               if names[locality.key(item["name"], item["zip"])] == 1}
 
     def finish(blobs: list[tuple[str, bytes]], day: str) -> dict[str, Any]:
         rows, dropped = [], 0
