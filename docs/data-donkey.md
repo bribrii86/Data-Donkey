@@ -304,3 +304,21 @@ goes into snapshots, so the weekly diff and call-this-week are untouched; the we
   and listed, never worked around. Two seconds between pages, one retry on a network error or 5xx.
 - Only public hosts are fetched (no localhost or private addresses). A page the model declines, times out on or
   garbles is listed as an error and the run goes on; a declined call still counts toward the cap.
+
+## Lease calendar and two score boosts (v0.6.2, free)
+
+`python -m donkey lease-calendar` lists copier leases likely ending from 30 days ago to 12 months ahead
+(`--months N`), grouped by month, soonest first, with who decides. `--all-lessors` adds equipment-finance leases,
+`--csv FILE` writes the rows, and `api.lease_calendar()` returns them. The end dates are estimates (filing + 60 months,
+`donkey/ucc.py`), so read the month as when to call, not as a contract date. Only the estimated end decides the
+window; `lease_window_start` (filing + 36 months) is shown for reference. A business with several filings from the same
+lessor and end month shows once; terminated or lapsed filings are left out when the index gives a status.
+
+call-this-week now adds two boosts to a business that is already on the list. A boost never puts a business on the
+list by itself.
+- `print_heavy` (+1, "heavy-print line of work"): law, accounting/tax, medical and dental, real estate, title and
+  escrow, mortgage, insurance, schools and colleges; matched on the name or the stored category (Overture's
+  `elementary_school` style categories count). Churches, "Academy Sports"-style names and bare "charter" don't.
+- `hiring` (+2, "hiring or expanding"): the who-decides answer's initiative line mentions hiring, job posts, a new
+  location or an expansion, and doesn't say "not hiring" or "no expansion". The who-decides prompt now also searches "NAME TOWN AZ jobs" and writes "hiring" when it
+  sees a job post (same $5 cap).

@@ -125,11 +125,11 @@ def test_call_this_week_combines_triggers_by_area(tmp_path):
 
     hits = api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)
     assert [(h["name"], h["score"], h["signals"]) for h in hits] == [
+        ("Example Law Office", 6, ["ucc_lease_ending", "print_heavy"]),  # v0.6.2: law and dental offices +1
         ("Desert Rose Plumbing", 5, ["home_to_office"]),
-        ("Example Law Office", 5, ["ucc_lease_ending"]),
-        ("Synthetic Dental PLLC", 4, ["ucc_new_copier_lessor"]),
+        ("Synthetic Dental PLLC", 5, ["ucc_new_copier_lessor", "print_heavy"]),
     ]
-    assert hits[1]["reasons"] == ["copier lease likely ending"]
+    assert hits[0]["reasons"] == ["copier lease likely ending", "heavy-print line of work"]
 
     phoenix = api.call_this_week("phoenix-metro", as_of="2026-10-12", min_score=1, db_path=db)
     assert [(h["name"], h["signals"]) for h in phoenix] == [
@@ -147,8 +147,8 @@ def test_call_this_week_scorer_hook_adds_to_the_same_business(tmp_path):
                "signal": "buildout_permit", "reason": "build-out permit filed", "date": "2026-10-08"}
 
     hits = api.call_this_week("stephanie", as_of="2026-10-12", scorers=[permits], db_path=db)
-    assert hits[0]["name"] == "Synthetic Dental PLLC" and hits[0]["score"] == 8
-    assert hits[0]["reasons"] == ["new financing with a copier lessor", "build-out permit filed"]
+    assert hits[0]["name"] == "Synthetic Dental PLLC" and hits[0]["score"] == 9
+    assert hits[0]["reasons"] == ["new financing with a copier lessor", "build-out permit filed", "heavy-print line of work"]
 
 
 def test_snapshot_area_filter_and_cli(tmp_path, monkeypatch, capsys):
@@ -219,3 +219,52 @@ def test_database_from_v050_gets_backfilled(tmp_path, monkeypatch, capsys):
     assert main(["call-this-week", "--area", "stephanie", "--as-of", "2026-10-12"]) == 0
     out = capsys.readouterr().out
     assert "3 to call" in out and "(location unknown)" in out and "(Casa Grande)" in out
+
+
+def test_lease_calendar_by_month(tmp_path, capsys, monkeypatch):
+    """v0.6.2: copier leases likely ending, soonest first, with their month; other lessors only on request."""
+    db = tmp_path / "donkey.db"
+    rows = INDEX_ROWS + [["202200000005", "06/10/2022", "Sample Title Agency", "Coolidge", "85128",
+                          "Ascentium Capital LLC", "Active", ""]]
+    ingest("az-sos-ucc-index", _tsv(tmp_path / "idx.txt", INDEX_HEADER, rows), "AZ SOS (synthetic)", db)
+    cal = api.lease_calendar("stephanie", as_of="2026-10-12", months=12, db_path=db)
+    assert [(r["name"], r["month"], r["lessor_type"]) for r in cal] == [
+        ("Example Law Office", "2027-02", "copier_lessor")]
+    assert cal[0]["filed"] == "2022-02-15" and cal[0]["who_decides"] == "unknown"
+    wide = api.lease_calendar("stephanie", as_of="2026-10-12", months=12, all_lessors=True, db_path=db)
+    assert [r["name"] for r in wide] == ["Example Law Office", "Sample Title Agency"]
+    assert api.lease_calendar("stephanie", as_of="2026-10-12", months=3, db_path=db) == []
+    with pytest.raises(ValueError, match="months"):
+        api.lease_calendar("stephanie", months=0, db_path=db)
+    monkeypatch.setenv("DONKEY_DB", str(db))
+    out = tmp_path / "cal.csv"
+    assert main(["lease-calendar", "--as-of", "2026-10-12", "--csv", str(out)]) == 0
+    printed = capsys.readouterr().out
+    assert "2027-02" in printed and "Example Law Office (Maricopa)" in printed and "1 leases likely ending" in printed
+    assert "Example Law Office" in out.read_text(encoding="utf8")
+
+
+@pytest.mark.parametrize("name, category, heavy", [
+    ("Pinal Family Law PLLC", "", True), ("Desert CPA Group", "", True), ("Valley Realty", "", True),
+    ("Sun Dental", "", True), ("Casa Grande Prep Academy", "", True), ("Acme LLC", "accounting", True),
+    ("Desert Rose Plumbing", "plumber", False), ("Title Boxing Club", "", False), ("Maricopa Tacos", "", False),
+])
+def test_print_heavy_names(name, category, heavy):
+    from donkey.triggers import looks_print_heavy
+    assert looks_print_heavy(name, category) is heavy
+
+
+def test_hiring_boost_from_who_decides_answer(tmp_path):
+    from donkey import locality
+    from donkey.ingest import connect
+    db = tmp_path / "donkey.db"
+    _snapshots(tmp_path, db)
+    con = connect(db)
+    locality.save(con, "Desert Rose Plumbing", "85122", "Casa Grande", {
+        "value": "local", "evidence": "owner on site", "confidence": "high", "owner_hint": "",
+        "initiative": "Hiring a front desk coordinator (Indeed post)", "source": "agent"})
+    con.commit()
+    con.close()
+    hit = api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)[0]
+    assert hit["name"] == "Desert Rose Plumbing" and hit["score"] == 7
+    assert hit["signals"] == ["home_to_office", "hiring"] and hit["reasons"][-1] == "hiring or expanding"

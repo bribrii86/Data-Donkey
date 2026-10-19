@@ -5,7 +5,11 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-18)
+## Current state (2026-10-19)
+- v0.6.2 (stacked on v0.6.1 / PR #10; Buck said yes 2026-10-19 01:43 UTC): `lease-calendar` CLI + `api.lease_calendar()`
+  (copier leases likely ending by month, from the UCC estimates). call-this-week boosts on listed rows only:
+  `print_heavy` +1 (law, accounting, medical, real estate/title, insurance, schools) and `hiring` +2 (who-decides
+  initiative mentions hiring or expansion; that prompt now also searches job posts).
 - v0.6.1: `crawl-ab` (Buck asked 2026-10-18 23:41 UTC). Optional Crawl4AI fetch layer (`donkey/crawl.py`, extra
   `crawl`) for a one-town A/B against the agent's last run of that town: same pages, Crawl4AI Markdown + one Messages
   call per page, report of cost/tokens/rows. Cap DONKEY_CRAWL_CAP_USD $2, model DONKEY_CRAWL_MODEL (default Opus 5.5).

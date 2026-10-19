@@ -99,11 +99,11 @@ phones): the owner or manager at that location, or someone elsewhere. The rows a
 instructions.
 
 For each row read the business's own website (footer, About, Team and Locations pages), then search the web for
-"NAME TOWN AZ owner", "NAME corporate office" and "NAME parent company". Check the Arizona Corporation Commission
-entity record (members, managers, officers; a statutory agent that is a law firm or an agent service such as CT
+"NAME TOWN AZ owner", "NAME corporate office", "NAME parent company" and "NAME TOWN AZ jobs". Check the Arizona
+Corporation Commission entity record (members, managers, officers; a statutory agent that is a law firm or an agent service such as CT
 Corporation, CSC or Registered Agents Inc is never the decision maker; a foreign entity or an out-of-state principal
 address points to a parent). Also note any public sign of a current company initiative (new location, expansion,
-hiring office or IT staff, a press release) in one short line.
+hiring office, admin, front desk or IT staff, a press release) in one short line; say "hiring" when you saw a job post.
 
 decision_locality, exactly one of:
 - local: owner or manager on site decides.

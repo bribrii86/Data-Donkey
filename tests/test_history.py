@@ -96,7 +96,7 @@ def test_sba_loans_keep_arizona_and_score(tmp_path, capsys, monkeypatch):
     assert set(loans) == {"Synthetic Vet Clinic LLC", "Old Loan Bakery"} and loans["Old Loan Bakery"]["event_date"] == "2015-03-02"
     hits = api.call_this_week("stephanie", as_of="2026-10-01", db_path=db)
     assert [(h["name"], h["signals"], h["reasons"]) for h in hits] == [
-        ("Synthetic Vet Clinic LLC", ["sba_loan"], ["SBA loan approved"])]
+        ("Synthetic Vet Clinic LLC", ["sba_loan", "print_heavy"], ["SBA loan approved", "heavy-print line of work"])]
     assert hits[0]["details"][0]["amount"] == "350000"
     assert triggers.SBA_LOOKBACK_DAYS == 180
 
