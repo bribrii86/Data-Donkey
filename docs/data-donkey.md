@@ -339,16 +339,18 @@ ZIP or street, so it matches on name and town.
 
 Each business stores `phone_key` (10 digits; toll-free numbers are left out, chains share them) and `domain_key` (the
 website host without `www.`; Facebook, Yelp, LinkedIn, Wix, GoDaddy and other shared hosts are left out). Maps that
-carry them: `city-business-list` (Phone, Website), `overture-places`, `overture-history-db`, `crustdata-companies`
+carry them: `city-business-list` (Business Phone, Website; a plain "Phone" column stays the contact's, it can be
+an owner's cell), `overture-places`, `overture-history-db`, `crustdata-companies`
 (domain). Matching adds three rules on top of name + ZIP/street, and never merges otherwise:
 
-- Same name, new address, same phone: the business moved; it is matched, not stored twice. A shared domain alone
-  does not count here (two stores of a chain share one).
-- Same-name tie (several in the ZIP, or a file with no address such as Crustdata): a single one with the same phone
+- Same name, new address in the same town, same phone, and no other same-name business stored: it moved; matched,
+  not stored twice. A shared domain alone never counts here (stores of a chain share one).
+- Same-name tie (several in the ZIP, or a Crustdata row with several in its town): exactly one with the same phone
   or domain wins; otherwise the row stays `needs_review`.
-- Different spelling ("Sample Title And Escrow" vs "Sample Title Agency"): matched only when phone AND domain both
-  agree with exactly one business.
+- Different spelling ("Sample Title And Escrow" vs "Sample Title Agency"): matched only when phone AND domain agree
+  with exactly one business whose name shares words with it and whose ZIP (when both are known) is the same.
 
-Doctors sharing a clinic phone keep separate rows (different names, no shared domain). An older donkey.db gets the
-columns the first time it is opened, with keys filled from the stored source rows read through today's maps; nothing
-to run. Matched rows don't change the stored address.
+Doctors or tenants sharing a building phone and website keep separate rows (their names share no words). A match
+the keys decided adds no keys to the stored business. An older donkey.db gets the
+columns the first time it is opened, with keys filled from the stored source rows read through today's maps (one transaction);
+nothing to run. Matched rows don't change the stored address.

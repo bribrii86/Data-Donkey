@@ -6,7 +6,7 @@ import pytest
 
 from donkey.ingest import connect, domain_key, ingest, phone_key
 
-COLUMNS = ["Business Name", "Address", "City", "ZIP", "Phone", "Website"]
+COLUMNS = ["Business Name", "Address", "City", "ZIP", "Business Phone", "Website"]
 
 
 def _file(path, rows):
@@ -18,7 +18,7 @@ def _file(path, rows):
 
 
 def _row(name, street, zip_code, phone="", website=""):
-    return {"Business Name": name, "Address": street, "City": "Casa Grande", "ZIP": zip_code, "Phone": phone,
+    return {"Business Name": name, "Address": street, "City": "Casa Grande", "ZIP": zip_code, "Business Phone": phone,
             "Website": website}
 
 
@@ -88,6 +88,47 @@ def test_same_name_tie_in_town_is_broken_by_domain(tmp_path):
     assert result["matched"] == 1 and result["needs_review"] == 0
 
 
+def test_same_name_tie_with_two_key_hits_stays_needs_review(tmp_path):
+    db = tmp_path / "donkey.db"
+    rows = [_row("Sample Builders", "1 Test Rd", "85122", website="samplebuilders.com"),
+            _row("Sample Builders", "2 Test Rd", "85193", website="samplebuilders.com")]
+    ingest("city-business-list", _file(tmp_path / "a.csv", rows), "test", db)
+    crust = tmp_path / "crust.csv"
+    with crust.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["basic_info.name", "basic_info.primary_domain",
+                                                    "locations.headquarters"])
+        writer.writeheader()
+        writer.writerow({"basic_info.name": "Sample Builders", "basic_info.primary_domain": "samplebuilders.com",
+                         "locations.headquarters": "Casa Grande, Arizona, United States"})
+    assert ingest("crustdata-companies", crust, "test", db)["needs_review"] == 1
+
+
+def test_tenants_sharing_a_building_phone_and_website_stay_separate(tmp_path):
+    db = tmp_path / "donkey.db"
+    rows = [_row("Dr Sample One", "5 Test Pkwy", "85122", "(520) 555-0150", "sampleclinic.com"),
+            _row("Dr Example Two", "5 Test Pkwy", "85122", "(520) 555-0150", "sampleclinic.com")]
+    assert ingest("city-business-list", _file(tmp_path / "a.csv", rows), "test", db)["new"] == 2
+
+
+def test_chain_store_sharing_a_local_phone_in_another_town_is_new(tmp_path):
+    db = tmp_path / "donkey.db"
+    ingest("city-business-list", _file(tmp_path / "a.csv", [_row("Example Tire Co", "1 Test Rd", "85122",
+                                                                   "(520) 555-0190")]), "test", db)
+    other = _row("Example Tire Co", "9 Test Rd", "85128", "(520) 555-0190")
+    other["City"] = "Coolidge"
+    assert ingest("city-business-list", _file(tmp_path / "b.csv", [other]), "test", db)["new"] == 1
+
+
+def test_toll_free_and_social_pages_never_match(tmp_path):
+    db = tmp_path / "donkey.db"
+    ingest("city-business-list", _file(tmp_path / "a.csv", [_row("Sample Mesa Dental", "10 W Test St", "85122",
+                                                                   "1-800-555-0199", "facebook.com/x")]), "test", db)
+    moved = ingest("city-business-list", _file(tmp_path / "b.csv", [_row("Sample Mesa Dental", "900 E Example Rd",
+                                                                         "85193", "1-800-555-0199",
+                                                                         "facebook.com/x")]), "test", db)
+    assert moved["new"] == 1
+
+
 def test_older_database_gets_keys_from_stored_rows(tmp_path):
     db = tmp_path / "donkey.db"
     ingest("city-business-list", _file(tmp_path / "a.csv", [_row("Sample Mesa Dental", "10 W Test St", "85122",
@@ -104,5 +145,26 @@ def test_older_database_gets_keys_from_stored_rows(tmp_path):
     try:
         row = con.execute("SELECT phone_key, domain_key FROM businesses").fetchone()
         assert (row["phone_key"], row["domain_key"]) == ("5205550142", "samplemesadental.com")
+    finally:
+        con.close()
+    connect(db).close()  # opening it again changes nothing
+
+
+def test_backfill_skips_rows_whose_map_is_gone(tmp_path):
+    db = tmp_path / "donkey.db"
+    ingest("city-business-list", _file(tmp_path / "a.csv", [_row("Sample Mesa Dental", "10 W Test St", "85122",
+                                                                   "(520) 555-0142")]), "test", db)
+    raw = sqlite3.connect(db)
+    raw.execute("INSERT INTO sources (id, name, created_at) VALUES ('old-map', 'gone', '2026-01-01')")
+    raw.execute("UPDATE records SET source_id = 'old-map'")
+    raw.execute("DROP INDEX idx_businesses_phone")
+    raw.execute("DROP INDEX idx_businesses_domain")
+    raw.execute("ALTER TABLE businesses DROP COLUMN phone_key")
+    raw.execute("ALTER TABLE businesses DROP COLUMN domain_key")
+    raw.commit()
+    raw.close()
+    con = connect(db)
+    try:
+        assert con.execute("SELECT phone_key FROM businesses").fetchone()[0] == ""
     finally:
         con.close()
