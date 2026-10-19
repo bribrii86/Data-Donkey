@@ -56,6 +56,7 @@ def test_window_edges_kiosks_and_one_signal_per_business(tmp_path):
         ["Late Test Office", "", "2 Test St", "Casa Grande", "AZ", "85122", "BL-2", "2026-08-19", "Service"],  # day 61
         ["Future Test Office", "", "3 Test St", "Casa Grande", "AZ", "85122", "BL-3", "2026-11-01", "Service"],
         ["Coinme", "", "4 Test St", "Casa Grande", "AZ", "85122", "BL-4", "2026-10-01", "Retailer"],
+        ["ECOATM LLC", "", "4 Test St Ste 1", "Casa Grande", "AZ", "85122", "BL-9", "2026-10-01", "Wholesale"],
         ["Twice Test Cafe", "", "5 Test St", "Casa Grande", "AZ", "85122", "BL-5", "2026-10-01", "Restaurant"],
         ["Twice Test Cafe", "", "5 Test St", "Casa Grande", "AZ", "85122", "BL-6", "2026-10-02", "Retailer"],
         ["Blank Test Date", "", "6 Test St", "Casa Grande", "AZ", "85122", "BL-7", "", "Service"],

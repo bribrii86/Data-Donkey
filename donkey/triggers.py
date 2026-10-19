@@ -228,7 +228,9 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
     for row in rows:
         details = json.loads(row["details_json"])
         name, zip_code = details.get("name", ""), details.get("zip", "")
-        if row["event_date"][5:10] == "01-01" or looks_like_kiosk(name):
+        # licenses carry the legal suffix ("ECOATM LLC"), which looks_like_kiosk reads as a real company: drop it first
+        bare = re.sub(r"[\s,]+(llc|l\.l\.c\.?|inc\.?|corp\.?|co\.?)$", "", name.strip(), flags=re.IGNORECASE)
+        if row["event_date"][5:10] == "01-01" or looks_like_kiosk(bare):
             continue
         if area and not areas.contains(area, zip_code, row["town"] or ""):
             continue
