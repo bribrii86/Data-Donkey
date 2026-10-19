@@ -333,3 +333,41 @@ def test_crustdata_growth_gives_the_hiring_boost(tmp_path):
         assert _growing(con, date(2027, 6, 1)) == set()  # older than 180 days
     finally:
         con.close()
+
+
+def test_crustdata_newer_export_wins_and_matches_only_in_town(tmp_path):
+    from datetime import date
+
+    from donkey.ingest import connect
+    from donkey.triggers import _boost, _growing
+    db = tmp_path / "donkey.db"
+    _snapshots(tmp_path, db)
+    con = connect(db)
+    con.execute("INSERT INTO businesses (name, normalized_name, city, zip, created_at, updated_at) VALUES "
+                "('Desert Rose Plumbing', 'desert rose plumbing', 'Casa Grande', '85122', 'x', 'x')")
+    con.commit()
+    con.close()
+    old, new = tmp_path / "old.csv", tmp_path / "new.csv"
+    old.write_text(CRUST_HEADER + '1,Desert Rose Plumbing,,,2-10,4,25%,"Maricopa, Arizona, United States"\n'
+                   '2,Copper Sky Dental,,,2-10,6,"1,200","Eloy, Arizona, United States"\n', encoding="utf8")
+    new.write_text(CRUST_HEADER + '1,Desert Rose Plumbing,,,2-10,4,0,"Maricopa, Arizona, United States"\n',
+                   encoding="utf8")
+    first = ingest("crustdata-companies", old, "test", db)
+    assert first["matched"] == 0  # same name, other town: a new business, not the Casa Grande one
+    con = connect(db)
+    con.execute("UPDATE events SET event_date = '2026-10-01' WHERE kind = 'headcount_growth'")
+    con.commit()
+    con.close()
+    assert ingest("crustdata-companies", old, "test", db)["duplicate"]
+    ingest("crustdata-companies", new, "test", db)
+    con = connect(db)
+    con.execute("UPDATE events SET event_date = '2026-10-10' WHERE kind = 'headcount_growth' "
+                "AND event_date <> '2026-10-01'")
+    con.commit()
+    try:
+        assert _growing(con, date(2026, 10, 12)) == {"copper sky dental|eloy"}
+    finally:
+        con.close()
+    item = {"name": "Acme", "score": 3, "signals": [], "reasons": [], "locality": {"initiative": "hiring a CPA"}}
+    _boost(item, "plumber", growing=True)
+    assert item["signals"] == ["hiring"] and item["score"] == 5

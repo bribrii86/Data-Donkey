@@ -116,13 +116,16 @@ def _iso_date(value: str) -> str:
     return parsed.isoformat() if parsed else ""
 
 
-def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int | None, str, list[int]]:
+def _find_business(
+    con: sqlite3.Connection, values: dict[str, str], by_city: bool = False,
+) -> tuple[int | None, str, list[int]]:
+    """by_city: a file with a town but no street or ZIP (Crustdata) only matches a same-name business in that town."""
     name = values.get("name", "").strip()
     normalized = _norm(name) if name else ""
     if not normalized:
         return None, "needs_review", []
     same_name = con.execute(
-        "SELECT id, zip, street FROM businesses WHERE normalized_name = ? ORDER BY id",
+        "SELECT id, zip, street, city FROM businesses WHERE normalized_name = ? ORDER BY id",
         (normalized,),
     ).fetchall()
     zip_code = re.sub(r"\D", "", values.get("zip", ""))
@@ -136,6 +139,9 @@ def _find_business(con: sqlite3.Connection, values: dict[str, str]) -> tuple[int
         return int(location_matches[0]["id"]), "matched", []
     if len(location_matches) > 1:
         return None, "needs_review", [int(row["id"]) for row in location_matches]
+    if by_city and not (zip_code or street):
+        city = values.get("city", "").strip().casefold()
+        same_name = [row for row in same_name if city and (row["city"] or "").strip().casefold() == city]
     if same_name and not (zip_code or street):
         if len(same_name) == 1:
             return int(same_name[0]["id"]), "matched", []
@@ -221,7 +227,8 @@ def _ingest_rows(
             for date_field in ("event_date", "open_date"):
                 if values.get(date_field):
                     values[date_field] = _iso_date(values[date_field])
-            business_id, status, review_candidates = _find_business(con, values)
+            business_id, status, review_candidates = _find_business(con, values,
+                                                                    by_city=mapping.get("prepare") == "crustdata")
             counts[status] += 1
             record = con.execute(
                 """INSERT INTO records

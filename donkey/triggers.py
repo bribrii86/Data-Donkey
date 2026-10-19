@@ -293,21 +293,21 @@ def _town_key(name: str, town: str) -> str:
 
 
 def _growing(con: sqlite3.Connection, today: date) -> set[str]:
-    """Name + town of businesses whose headcount grew in a Crustdata export imported in the last 180 days (the
-    export has no ZIP or street, so it matches on name and town)."""
+    """Name + town of businesses whose headcount grew in the latest Crustdata export imported in the last 180 days
+    (a newer export with flat growth cancels an older one; the export has no ZIP or street, so it matches on name and
+    town)."""
     since = (today - timedelta(days=GROWTH_LOOKBACK_DAYS)).isoformat()
     rows = con.execute("""SELECT town, details_json FROM events WHERE kind = 'headcount_growth'
-        AND event_date >= ? AND event_date <= ?""", (since, today.isoformat()))
-    out = set()
+        AND event_date >= ? AND event_date <= ? ORDER BY event_date, id""", (since, today.isoformat()))
+    latest: dict[str, bool] = {}
     for row in rows:
         details = json.loads(row["details_json"])
         try:
-            grew = float(details.get("growth_6m") or 0) > 0
+            grew = float(str(details.get("growth_6m") or 0).replace("%", "").replace(",", "")) > 0
         except ValueError:
             grew = False
-        if grew:
-            out.add(_town_key(details.get("name", ""), row["town"] or ""))
-    return out
+        latest[_town_key(details.get("name", ""), row["town"] or "")] = grew
+    return {key for key, grew in latest.items() if grew}
 
 
 def _categories(con: sqlite3.Connection) -> dict[str, str]:
