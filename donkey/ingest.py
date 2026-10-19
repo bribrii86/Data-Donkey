@@ -210,6 +210,11 @@ def _ingest_rows(
         skipped = 0
         for row_number, row in enumerate(rows, start=1):
             values = _mapped_values(row, mapping["columns"])
+            if mapping.get("prepare") == "crustdata":  # "Casa Grande, Arizona, United States"; dated the import day
+                parts = [part.strip() for part in values.get("headquarters", "").split(",")]
+                values["city"] = parts[0].title() if parts else ""
+                values["state"] = parts[1] if len(parts) > 1 else ""
+                values["event_date"] = now[:10]
             if any(str(values.get(field, "")).strip().casefold() not in allowed for field, allowed in keep.items()):
                 skipped += 1  # e.g. a national file where only Arizona rows are wanted
                 continue

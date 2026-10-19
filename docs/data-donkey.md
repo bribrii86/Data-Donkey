@@ -322,3 +322,15 @@ list by itself.
 - `hiring` (+2, "hiring or expanding"): the who-decides answer's initiative line mentions hiring, job posts, a new
   location or an expansion, and doesn't say "not hiring" or "no expansion". The who-decides prompt now also searches "NAME TOWN AZ jobs" and writes "hiring" when it
   sees a job post (same $5 cap).
+
+## Crustdata headcount growth (v0.6.3)
+
+Source map `crustdata-companies` reads a company CSV from Crustdata's Data Export (app.crustdata.com). Rows outside
+Arizona are skipped; town comes from the headquarters column ("Casa Grande, Arizona, United States") and each row is
+stored as a `headcount_growth` event dated the import day.
+
+    python -m donkey ingest --source crustdata-companies --file FILE.csv --received-from "Crustdata export"
+
+call-this-week then gives the `hiring` boost (+2, same signal as the who-decides one, never counted twice) to a listed
+business whose headcount grew in the 6 months before the export, for 180 days after the import. The export has no
+ZIP or street, so it matches on name and town.

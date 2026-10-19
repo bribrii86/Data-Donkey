@@ -41,6 +41,7 @@ SCORES = {
 }
 BOOSTS = ("print_heavy", "hiring")
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
+GROWTH_LOOKBACK_DAYS = 180  # a Crustdata export's 6-month headcount growth stays useful about this long
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
 BOARD_LOOKBACK_DAYS = 45  # boards move slowly; a vote or RFP stays worth acting on for weeks
 NEW_LLC_LOOKBACK_DAYS = 60  # the notice runs up to 60 days after approval, so the formation date is already weeks old
@@ -259,9 +260,10 @@ def call_this_week(
             notes = [h for h in board if _norm(h["name"]) == _norm(item["name"])]
             item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
                 notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
-        categories = _categories(con)
+        categories, growing = _categories(con), _growing(con, today)
         for item in ranked:
-            _boost(item, categories.get(_key(item["name"], item["zip"]), ""))
+            _boost(item, categories.get(_key(item["name"], item["zip"]), ""),
+                   _town_key(item["name"], item["town"]) in growing)
     finally:
         con.close()
     return sorted(ranked, key=lambda item: (-item["score"], item["name"]))
@@ -273,17 +275,39 @@ def looks_print_heavy(name: str, category: str = "") -> bool:
         locality.looks_medical(name, category)
 
 
-def _boost(item: dict, category: str) -> None:
+def _boost(item: dict, category: str, growing: bool = False) -> None:
     """v0.6.2 boosts on a listed business: heavy-print line of work, and hiring or expanding per its who-decides
-    answer (the initiative line)."""
+    answer (the initiative line) or, since v0.6.3, a Crustdata headcount that grew."""
     initiative = (item.get("locality") or {}).get("initiative") or ""
     hits = {"print_heavy": looks_print_heavy(item["name"], category),
-            "hiring": bool(_HIRING.search(_NOT_HIRING.sub("", initiative)))}  # drop "not hiring" first
+            "hiring": growing or bool(_HIRING.search(_NOT_HIRING.sub("", initiative)))}  # drop "not hiring" first
     for signal, found in hits.items():
         if found and signal not in item["signals"]:
             item["score"] += SCORES[signal]
             item["signals"].append(signal)
             item["reasons"].append(REASONS[signal])
+
+
+def _town_key(name: str, town: str) -> str:
+    return f"{_norm(name)}|{(town or '').strip().casefold()}"
+
+
+def _growing(con: sqlite3.Connection, today: date) -> set[str]:
+    """Name + town of businesses whose headcount grew in a Crustdata export imported in the last 180 days (the
+    export has no ZIP or street, so it matches on name and town)."""
+    since = (today - timedelta(days=GROWTH_LOOKBACK_DAYS)).isoformat()
+    rows = con.execute("""SELECT town, details_json FROM events WHERE kind = 'headcount_growth'
+        AND event_date >= ? AND event_date <= ?""", (since, today.isoformat()))
+    out = set()
+    for row in rows:
+        details = json.loads(row["details_json"])
+        try:
+            grew = float(details.get("growth_6m") or 0) > 0
+        except ValueError:
+            grew = False
+        if grew:
+            out.add(_town_key(details.get("name", ""), row["town"] or ""))
+    return out
 
 
 def _categories(con: sqlite3.Connection) -> dict[str, str]:
