@@ -366,6 +366,12 @@ def main(argv: list[str] | None = None) -> int:
     calls.add_argument("--days", type=int, default=14, help="look back this many days (default 14)")
     calls.add_argument("--min-score", type=int, default=3)
     calls.add_argument("--json", action="store_true", help="print JSON instead of a table")
+    lease = commands.add_parser("lease-calendar", help="free: copier leases likely ending, by month (UCC estimates)")
+    lease.add_argument("--area", default="stephanie", help="area from areas.json")
+    lease.add_argument("--as-of", help="YYYY-MM-DD (default: today)")
+    lease.add_argument("--months", type=int, default=12, help="months ahead (default 12)")
+    lease.add_argument("--all-lessors", action="store_true", help="include equipment-finance leases, not just copier")
+    lease.add_argument("--csv", help="also write the rows to this CSV file")
     diff = commands.add_parser("growth-diff", help="turn changes between the latest two snapshots into events")
     diff.add_argument("--old", type=int, help="older snapshot ID (default: previous with the same label)")
     diff.add_argument("--new", type=int, help="newer snapshot ID (default: latest)")
@@ -475,6 +481,30 @@ def main(argv: list[str] | None = None) -> int:
         except (OSError, ValueError, sqlite3.Error) as exc:
             print(f"{args.command} failed: {exc}", file=sys.stderr)
             return 1
+        return 0
+    if args.command == "lease-calendar":
+        from .triggers import lease_calendar
+
+        try:
+            rows = lease_calendar(args.area, args.as_of, args.months, args.all_lessors)
+        except (OSError, ValueError, sqlite3.Error) as exc:
+            print(f"lease-calendar failed: {exc}", file=sys.stderr)
+            return 1
+        month = ""
+        for row in rows:
+            if row["month"] != month:
+                month = row["month"]
+                print(f"\n{month}")
+            where = row["town"] or row["zip"] or "location unknown"
+            who = "" if row["who_decides"] == "unknown" else f" [who decides: {row['who_decides']}]"
+            print(f"  {row['lease_end_est']}  {row['name']} ({where}), {row['secured_party']}, filed {row['filed']}{who}")
+        print(f"{len(rows)} leases likely ending")
+        if args.csv and rows:
+            with open(args.csv, "w", encoding="utf8", newline="") as stream:
+                writer = csv.DictWriter(stream, fieldnames=list(rows[0]))
+                writer.writeheader()
+                writer.writerows(rows)
+            print(f"CSV: {args.csv}")
         return 0
     if args.command == "call-this-week":
         from .triggers import call_this_week

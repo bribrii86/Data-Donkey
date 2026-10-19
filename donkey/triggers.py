@@ -19,7 +19,7 @@ from . import areas, locality, ucc
 from .common import database_path, parse_date
 from .common import norm as _norm
 
-__all__ = ["SCORES", "Scorer", "call_this_week"]
+__all__ = ["SCORES", "Scorer", "call_this_week", "lease_calendar", "looks_print_heavy"]
 
 # Points per trigger. Tune here; a business at min_score or more is a "call this week".
 SCORES = {
@@ -35,7 +35,11 @@ SCORES = {
     "board_vendor": 3,  # a public body named its current vendor or contract terms
     "board_intent_minus": 0,  # declined or tabled a purchase: shown as a reason, never a reason to call
     "board_info": 0,
+    # v0.6.2 boosts: added only to a business already on the list, never a reason to call on their own
+    "print_heavy": 1,  # law, accounting, medical, real estate/title, insurance, schools: print a lot
+    "hiring": 2,  # the who-decides check found it hiring or opening a location (new desks)
 }
+BOOSTS = ("print_heavy", "hiring")
 LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
 BOARD_LOOKBACK_DAYS = 45  # boards move slowly; a vote or RFP stays worth acting on for weeks
@@ -76,7 +80,23 @@ REASONS = {
     "board_vendor": "board meeting named their vendor or contract",
     "board_intent_minus": "board meeting: purchase declined or tabled",
     "board_info": "board meeting mentioned equipment or IT",
+    "print_heavy": "heavy-print line of work",
+    "hiring": "hiring or expanding",
 }
+_PRINT_HEAVY = re.compile(
+    r"\b(law(?! enforcement)|attorneys?|lawyers?|legal (services?|aid)|paralegal|cpas?|"
+    r"accounting|accountants?|tax (services?|prep|preparation)|title (company|agency|insurance)|escrow|realty|"
+    r"real estate|realtors?|mortgage|insurance|preschool|learning center|college)\b"
+    r"|\b(elementary|middle|high|charter|private|public|montessori|christian|prep|preparatory) (schools?|academy)\b"
+    r"|\b(schools?|school district|unified|university)\b", re.IGNORECASE)
+_NOT_PRINT_HEAVY = re.compile(r"\b(driving|truck|cdl|dance|karate|martial|swim\w*|beauty|barber|cosmetology|pizza|"
+                              r"grill|sports?|chicken)\b", re.IGNORECASE)
+_HIRING = re.compile(r"\b(hiring|job (posts?|openings?|listings?)|recruit\w*|new (location|office|branch)|expan\w*|"
+                     r"second location|opening (a|another)\b)", re.IGNORECASE)
+_NOT_HIRING = re.compile(r"\b(no|not|none|nothing)\s+(currently\s+|actively\s+|planned\s+|planning\s+)?"
+                         r"(hiring|expan\w*|job (posts?|openings?|listings?)|new (location|office|branch))\w*( plans?)?",
+                         re.IGNORECASE)
+_DEAD_FILING = re.compile(r"terminat|lapse|released|expired", re.IGNORECASE)
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
 # {"name", "zip", "town", "score", "signal", "date"} plus anything else worth showing.
@@ -110,7 +130,8 @@ def _town_in_name(area: dict, name: str) -> str:
     return ""
 
 
-def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+def _ucc_rows(con: sqlite3.Connection, area: dict | None) -> Iterable[tuple[dict, dict, date | None]]:
+    """(base fields, filing details, filed date) per UCC filing in the area, with the location rules below."""
     rows = con.execute(
         """SELECT events.*, businesses.name AS business_name, businesses.zip AS business_zip,
         businesses.city AS business_city FROM events LEFT JOIN businesses ON businesses.id = events.business_id
@@ -120,7 +141,7 @@ def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
         details = json.loads(row["details_json"])
         if "lessor_type" not in details:  # stored before v0.5.2 in a database opened read-only here
             details.update(ucc.enrich({"secured_party": details.get("secured_party", ""),
-                                       "event_date": row["event_date"] or ""}))
+                                   "event_date": row["event_date"] or ""}))
         name = row["business_name"] or details.get("name", "")
         zip_code = details.get("zip") or row["business_zip"] or ""
         town = row["town"] or row["business_city"] or ""
@@ -133,9 +154,14 @@ def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
         elif area and not areas.contains(area, zip_code, town):
             continue
         filed = parse_date(row["event_date"]) if row["event_date"] else None
-        kind = details.get("lessor_type", "")
         base = {"name": name, "zip": zip_code, "town": town, "secured_party": details.get("secured_party", ""),
                 "filing_number": details.get("filing_number", ""), "location": location}
+        yield base, details, filed
+
+
+def _ucc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+    for base, details, filed in _ucc_rows(con, area):
+        kind = details.get("lessor_type", "")
         if filed and since <= filed <= as_of:
             signal = f"ucc_new_{kind}" if f"ucc_new_{kind}" in SCORES else ""
             if signal and SCORES[signal]:
@@ -233,9 +259,88 @@ def call_this_week(
             notes = [h for h in board if _norm(h["name"]) == _norm(item["name"])]
             item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
                 notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
+        categories = _categories(con)
+        for item in ranked:
+            _boost(item, categories.get(_key(item["name"], item["zip"]), ""))
     finally:
         con.close()
-    return ranked
+    return sorted(ranked, key=lambda item: (-item["score"], item["name"]))
+
+
+def looks_print_heavy(name: str, category: str = "") -> bool:
+    text = f"{name} {category}".replace("_", " ")  # Overture categories: elementary_school, insurance_agency
+    return (bool(_PRINT_HEAVY.search(text)) and not _NOT_PRINT_HEAVY.search(text)) or \
+        locality.looks_medical(name, category)
+
+
+def _boost(item: dict, category: str) -> None:
+    """v0.6.2 boosts on a listed business: heavy-print line of work, and hiring or expanding per its who-decides
+    answer (the initiative line)."""
+    initiative = (item.get("locality") or {}).get("initiative") or ""
+    hits = {"print_heavy": looks_print_heavy(item["name"], category),
+            "hiring": bool(_HIRING.search(_NOT_HIRING.sub("", initiative)))}  # drop "not hiring" first
+    for signal, found in hits.items():
+        if found and signal not in item["signals"]:
+            item["score"] += SCORES[signal]
+            item["signals"].append(signal)
+            item["reasons"].append(REASONS[signal])
+
+
+def _categories(con: sqlite3.Connection) -> dict[str, str]:
+    """Category per name + ZIP from the latest snapshot of each list (Overture, town lists); first one seen wins."""
+    try:
+        rows = con.execute(
+            """SELECT snapshot_rows.name, snapshot_rows.zip, snapshot_rows.category FROM snapshot_rows JOIN
+            (SELECT label, MAX(id) AS id FROM snapshots GROUP BY label) latest ON latest.id = snapshot_rows.snapshot_id
+            WHERE snapshot_rows.category <> ''""").fetchall()
+    except sqlite3.OperationalError:
+        return {}
+    out: dict[str, str] = {}
+    for name, zip_code, category in rows:
+        out.setdefault(_key(name, zip_code), category)
+    return out
+
+
+def lease_calendar(
+    area: str | None = None,
+    as_of: str | date | None = None,
+    months: int = 12,
+    all_lessors: bool = False,
+    db_path: str | Path | None = None,
+) -> list[dict]:
+    """Copier leases (with all_lessors, equipment-finance leases too) whose estimated end falls from 30 days ago to
+    `months` months ahead, soonest first, each with its month and who decides. Estimates come from ucc.enrich (filing
+    + 60 months), so treat the month as the time to call, not a contract date."""
+    today = as_of if isinstance(as_of, date) else (parse_date(as_of) if as_of else date.today())
+    if today is None:
+        raise ValueError(f"bad as_of date {as_of!r}")
+    if months < 1:
+        raise ValueError("months must be 1 or more")
+    start, stop = today - timedelta(days=30), ucc._add_months(today, months)
+    kinds = {"copier_lessor", "equipment_finance"} if all_lessors else {"copier_lessor"}
+    area_def = areas.load(area) if area else None
+    con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        rows, seen = [], set()
+        for base, details, filed in _ucc_rows(con, area_def):
+            end = parse_date(details.get("lease_end_est", "")) if details.get("lease_end_est") else None
+            if details.get("lessor_type") not in kinds or not end or not start <= end <= stop:
+                continue
+            if _DEAD_FILING.search(details.get("lien_status") or ""):
+                continue
+            # Amendments and continuations repeat a filing; show a business once per lessor and end month.
+            key = (_key(base["name"], base["zip"]), _norm(base["secured_party"]), end.strftime("%Y-%m"))
+            if key not in seen:
+                seen.add(key)
+                rows.append({**base, "month": end.strftime("%Y-%m"), "lease_end_est": end.isoformat(),
+                             "lease_window_start": details.get("lease_window_start", ""),
+                             "filed": filed.isoformat() if filed else "", "lessor_type": details["lessor_type"]})
+        for row, answer in zip(rows, locality.for_items(rows, con, today)):
+            row["who_decides"] = answer["value"]
+    finally:
+        con.close()
+    return sorted(rows, key=lambda r: (r["lease_end_est"], r["name"]))
 
 
 def _rank(hits: list[dict], min_score: int) -> list[dict]:

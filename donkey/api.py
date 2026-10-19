@@ -144,3 +144,10 @@ def call_this_week(*args, **kwargs) -> list[dict]:
     from .triggers import call_this_week as _call
 
     return _call(*args, **kwargs)
+
+
+def lease_calendar(*args, **kwargs) -> list[dict]:
+    """See donkey.triggers.lease_calendar."""
+    from .triggers import lease_calendar as _calendar
+
+    return _calendar(*args, **kwargs)

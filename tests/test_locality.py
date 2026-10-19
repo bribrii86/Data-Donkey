@@ -170,7 +170,7 @@ def test_minutes_become_board_events_scored_once(tmp_path):
     assert client.calls[0][3] == 300 and "board.test/a" in client.calls[1][1] and "No Links" not in client.calls[1][1]
     hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY, db_path=db)}
     board = hits["Casa Grande Elementary School District"]
-    assert board["score"] == 4 and board["signals"] == ["board_intent_plus"]
+    assert board["score"] == 5 and board["signals"] == ["board_intent_plus", "print_heavy"]  # a school: +1
     assert board["locality"]["value"] == "central_procurement"
     assert "RFP for district copiers" in board["board_note"]
     assert "City of Florence" not in hits  # an info flag (unknown flags become info) scores 0
