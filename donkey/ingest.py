@@ -32,7 +32,68 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript((Path(__file__).parent / "schema.sql").read_text(encoding="utf8"))
     ucc.backfill(con)
+    _add_match_keys(con)
     return con
+
+
+# Toll-free lines are shared by every store of a chain; platform hosts by thousands of unrelated businesses.
+_TOLL_FREE = ("800", "833", "844", "855", "866", "877", "888")
+_SHARED_HOSTS = ("facebook.com", "fb.com", "instagram.com", "linkedin.com", "yelp.com", "google.com", "goo.gl",
+                 "business.site", "wixsite.com", "godaddysites.com", "square.site", "squarespace.com", "weebly.com",
+                 "wordpress.com", "blogspot.com", "linktr.ee", "yellowpages.com", "mapquest.com", "bbb.org",
+                 "nextdoor.com", "twitter.com", "x.com", "tiktok.com", "youtube.com", "gmail.com", "yahoo.com",
+                 "outlook.com", "hotmail.com", "aol.com", "icloud.com")
+
+
+def phone_key(value: str) -> str:
+    """10-digit US number, or "" (no number, wrong length, or toll-free)."""
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits if len(digits) == 10 and not digits.startswith(_TOLL_FREE) else ""
+
+
+def domain_key(value: str) -> str:
+    """The website's host without www ("https://www.Example.com/about" -> "example.com"), or "" for social and
+    site-builder hosts, which unrelated businesses share."""
+    host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", (value or "").strip().casefold())
+    host = re.split(r"[/?#:]", host, maxsplit=1)[0].removeprefix("www.").strip(".")
+    if "." not in host or " " in host or any(host == h or host.endswith("." + h) for h in _SHARED_HOSTS):
+        return ""
+    return host
+
+
+def _add_match_keys(con: sqlite3.Connection) -> None:
+    """v0.6.4: phone and website-domain keys on businesses. A donkey.db from before gets the columns and its keys
+    filled from the stored source rows (read again through today's maps), once."""
+    columns = {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}
+    if "phone_key" in columns:
+        return
+    con.execute("ALTER TABLE businesses ADD COLUMN phone_key TEXT NOT NULL DEFAULT ''")
+    con.execute("ALTER TABLE businesses ADD COLUMN domain_key TEXT NOT NULL DEFAULT ''")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phone_key)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_businesses_domain ON businesses(domain_key)")
+    maps: dict[str, dict[str, Any] | None] = {}
+    for row in con.execute("SELECT source_id, raw_json, business_id FROM records WHERE business_id IS NOT NULL "
+                           "ORDER BY id").fetchall():
+        if row["source_id"] not in maps:
+            try:
+                maps[row["source_id"]] = load_source(row["source_id"])
+            except ValueError:
+                maps[row["source_id"]] = None
+        mapping = maps[row["source_id"]]
+        if mapping:
+            _set_keys(con, row["business_id"], _mapped_values(json.loads(row["raw_json"]), mapping["columns"]))
+    con.commit()
+
+
+def _set_keys(con: sqlite3.Connection, business_id: int, values: dict[str, str]) -> None:
+    """Fill a business's empty phone/domain keys; a key already stored is kept."""
+    phone, domain = phone_key(values.get("phone", "")), domain_key(values.get("website", ""))
+    if phone or domain:
+        con.execute("""UPDATE businesses SET phone_key = CASE WHEN phone_key = '' THEN ? ELSE phone_key END,
+                       domain_key = CASE WHEN domain_key = '' THEN ? ELSE domain_key END WHERE id = ?""",
+                    (phone, domain, business_id))
 
 
 def load_source(source_id: str) -> dict[str, Any]:
@@ -119,13 +180,25 @@ def _iso_date(value: str) -> str:
 def _find_business(
     con: sqlite3.Connection, values: dict[str, str], by_city: bool = False,
 ) -> tuple[int | None, str, list[int]]:
-    """by_city: a file with a town but no street or ZIP (Crustdata) only matches a same-name business in that town."""
+    """by_city: a file with a town but no street or ZIP (Crustdata) only matches a same-name business in that town.
+    v0.6.4: the phone and website-domain keys settle what name + place can't: a same-name business at a new
+    address with the same phone has moved (not a second business); a same-name tie is broken by a shared phone or
+    domain; a differently written name with the same phone AND domain is the same business."""
     name = values.get("name", "").strip()
     normalized = _norm(name) if name else ""
     if not normalized:
         return None, "needs_review", []
+    phone, domain = phone_key(values.get("phone", "")), domain_key(values.get("website", ""))
+
+    def keyed(rows):
+        return [row for row in rows if (phone and row["phone_key"] == phone) or (domain and row["domain_key"] == domain)]
+
+    def found(business_id: int) -> tuple[int, str, list[int]]:
+        _set_keys(con, business_id, values)
+        return business_id, "matched", []
+
     same_name = con.execute(
-        "SELECT id, zip, street, city FROM businesses WHERE normalized_name = ? ORDER BY id",
+        "SELECT id, zip, street, city, phone_key, domain_key FROM businesses WHERE normalized_name = ? ORDER BY id",
         (normalized,),
     ).fetchall()
     zip_code = re.sub(r"\D", "", values.get("zip", ""))
@@ -136,28 +209,41 @@ def _find_business(
         or (street and _street_norm(row["street"]) == street)
     ]
     if len(location_matches) == 1:
-        return int(location_matches[0]["id"]), "matched", []
+        return found(int(location_matches[0]["id"]))
     if len(location_matches) > 1:
+        if len(keyed(location_matches)) == 1:
+            return found(int(keyed(location_matches)[0]["id"]))
         return None, "needs_review", [int(row["id"]) for row in location_matches]
+    if (zip_code or street) and phone:  # same name, new address, same phone: it moved (domain alone could be a chain)
+        moved = [row for row in same_name if row["phone_key"] == phone]
+        if len(moved) == 1:
+            return found(int(moved[0]["id"]))
     if by_city and not (zip_code or street):
         city = values.get("city", "").strip().casefold()
-        same_name = [row for row in same_name if city and (row["city"] or "").strip().casefold() == city]
+        in_town = [row for row in same_name if city and (row["city"] or "").strip().casefold() == city]
+        same_name = in_town or [row for row in keyed(same_name)]  # HQ town can differ; a shared domain still says who
     if same_name and not (zip_code or street):
         if len(same_name) == 1:
-            return int(same_name[0]["id"]), "matched", []
+            return found(int(same_name[0]["id"]))
+        if len(keyed(same_name)) == 1:
+            return found(int(keyed(same_name)[0]["id"]))
         return None, "needs_review", [int(row["id"]) for row in same_name]
+    if phone and domain:
+        both = con.execute("SELECT id FROM businesses WHERE phone_key = ? AND domain_key = ?", (phone, domain)).fetchall()
+        if len(both) == 1:
+            return found(int(both[0]["id"]))
 
     now = datetime.now(timezone.utc).isoformat()
     cursor = con.execute(
         """INSERT INTO businesses
         (name, normalized_name, address, street, city, state, zip, vertical,
-         license_number, open_date, naics, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+         license_number, open_date, naics, created_at, updated_at, phone_key, domain_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name, normalized, values.get("address", ""), values.get("street", "") or values.get("address", ""),
             values.get("city", ""), values.get("state", ""), values.get("zip", ""),
             values.get("vertical", ""), values.get("license_number", ""), values.get("open_date", ""),
-            values.get("naics", ""), now, now,
+            values.get("naics", ""), now, now, phone, domain,
         ),
     )
     return int(cursor.lastrowid), "new", []

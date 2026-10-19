@@ -11,6 +11,8 @@
     "state": ["state", "properties.address.region"],
     "zip": ["zip", "properties.address.postcode"],
     "vertical": ["vertical", "properties.primary_category"],
-    "naics": "naics"
+    "naics": "naics",
+    "phone": ["phone", "properties.phone"],
+    "website": ["website", "properties.website"]
   }
 }

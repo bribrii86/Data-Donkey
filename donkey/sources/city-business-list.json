@@ -17,6 +17,8 @@
     "contact_name": ["Contact Name", "Contact"],
     "contact_title": ["Contact Title", "Title"],
     "contact_email": ["Email", "Contact Email"],
-    "contact_phone": ["Phone", "Contact Phone"]
+    "contact_phone": ["Phone", "Contact Phone"],
+    "phone": ["Business Phone", "Phone"],
+    "website": ["Website", "Web", "URL"]
   }
 }
