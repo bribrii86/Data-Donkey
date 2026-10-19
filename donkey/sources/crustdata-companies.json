@@ -1,0 +1,25 @@
+{
+  "id": "crustdata-companies",
+  "name": "Crustdata company export",
+  "description": "Company export from app.crustdata.com (Data Export, CSV). Built from LinkedIn company pages: name, website, headcount and its 6-month growth, headquarters as 'Town, State, Country'. No street, ZIP or contacts. Only Arizona rows are kept; town and state come from the headquarters column and the date is the import day. call-this-week gives a listed business the hiring boost when its headcount grew.",
+  "format": "csv",
+  "prepare": "crustdata",
+  "keep": {"state": ["Arizona"]},
+  "required": ["name", "headquarters", "growth_6m"],
+  "columns": {
+    "name": ["basic_info.name"],
+    "website": ["basic_info.primary_domain"],
+    "linkedin": ["basic_info.professional_network_url"],
+    "employee_range": ["basic_info.employee_count_range"],
+    "headcount": ["headcount.total"],
+    "growth_6m": ["headcount.growth_percent.6m"],
+    "headquarters": ["locations.headquarters"],
+    "crustdata_id": ["crustdata_company_id"]
+  },
+  "event": {
+    "kind": "headcount_growth",
+    "date": "event_date",
+    "town": "city",
+    "details": ["name", "website", "linkedin", "employee_range", "headcount", "growth_6m", "crustdata_id"]
+  }
+}

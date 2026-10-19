@@ -6,6 +6,10 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-19)
+- v0.6.3: `crustdata-companies` source map (Buck said yes 2026-10-19 05:53 UTC). A Crustdata company export (CSV,
+  LinkedIn-based) is stored as `headcount_growth` events (Arizona rows only, town from headquarters, dated the import
+  day); call-this-week gives the `hiring` boost to a listed business whose headcount grew (name + town match, 180
+  days). Buck's first export (trial credits, 2026-10-19): 1,550 rows, 523 in her towns, 125 of those grew.
 - v0.6.2 (stacked on v0.6.1 / PR #10; Buck said yes 2026-10-19 01:43 UTC): `lease-calendar` CLI + `api.lease_calendar()`
   (copier leases likely ending by month, from the UCC estimates). call-this-week boosts on listed rows only:
   `print_heavy` +1 (law, accounting, medical, real estate/title, insurance, schools) and `hiring` +2 (who-decides

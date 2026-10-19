@@ -296,3 +296,78 @@ def test_lease_calendar_drops_repeats_and_dead_filings(tmp_path):
     ingest("az-sos-ucc-index", _tsv(tmp_path / "idx.txt", INDEX_HEADER, rows), "AZ SOS (synthetic)", db)
     cal = api.lease_calendar("stephanie", as_of="2026-10-12", months=12, db_path=db)
     assert [r["name"] for r in cal] == ["Example Law Office"]
+
+
+CRUST_HEADER = ("crustdata_company_id,basic_info.name,basic_info.primary_domain,basic_info.professional_network_url,"
+                "basic_info.employee_count_range,headcount.total,headcount.growth_percent.6m,locations.headquarters\n")
+
+
+def test_crustdata_growth_gives_the_hiring_boost(tmp_path):
+    """v0.6.3: a listed business whose Crustdata headcount grew gets +2; other states and flat headcounts don't."""
+    db = tmp_path / "donkey.db"
+    _snapshots(tmp_path, db)
+    path = tmp_path / "crust.csv"
+    path.write_text(CRUST_HEADER +
+                    "1,Desert Rose Plumbing,dr.test,https://li.test/1,2-10,4,33.3,\"CASA GRANDE, Arizona, United States\"\n"
+                    "2,Flat Co,,https://li.test/2,2-10,3,0,\"Maricopa, Arizona, United States\"\n"
+                    "3,Havasu Synthetic,,https://li.test/3,2-10,3,50,\"Bullhead City, Nevada, United States\"\n",
+                    encoding="utf8")
+    result = ingest("crustdata-companies", path, "Crustdata export (synthetic)", db)
+    assert result["skipped"] == 1 and result["row_count"] == 3
+    con = sqlite3.connect(db)
+    towns = [r[0] for r in con.execute("SELECT town FROM events WHERE kind = 'headcount_growth' ORDER BY id")]
+    con.execute("UPDATE events SET event_date = '2026-10-10' WHERE kind = 'headcount_growth'")
+    con.commit()
+    con.close()
+    assert towns == ["Casa Grande", "Maricopa"]
+    hit = api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)[0]
+    assert hit["name"] == "Desert Rose Plumbing" and hit["signals"] == ["home_to_office", "hiring"]
+    assert hit["score"] == 7
+    from datetime import date
+
+    from donkey.triggers import _growing
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    try:
+        assert _growing(con, date(2026, 10, 12)) == {"desert rose plumbing|casa grande"}
+        assert _growing(con, date(2027, 6, 1)) == set()  # older than 180 days
+    finally:
+        con.close()
+
+
+def test_crustdata_newer_export_wins_and_matches_only_in_town(tmp_path):
+    from datetime import date
+
+    from donkey.ingest import connect
+    from donkey.triggers import _boost, _growing
+    db = tmp_path / "donkey.db"
+    _snapshots(tmp_path, db)
+    con = connect(db)
+    con.execute("INSERT INTO businesses (name, normalized_name, city, zip, created_at, updated_at) VALUES "
+                "('Desert Rose Plumbing', 'desert rose plumbing', 'Casa Grande', '85122', 'x', 'x')")
+    con.commit()
+    con.close()
+    old, new = tmp_path / "old.csv", tmp_path / "new.csv"
+    old.write_text(CRUST_HEADER + '1,Desert Rose Plumbing,,,2-10,4,25%,"Maricopa, Arizona, United States"\n'
+                   '2,Copper Sky Dental,,,2-10,6,"1,200","Eloy, Arizona, United States"\n', encoding="utf8")
+    new.write_text(CRUST_HEADER + '1,Desert Rose Plumbing,,,2-10,4,0,"Maricopa, Arizona, United States"\n',
+                   encoding="utf8")
+    first = ingest("crustdata-companies", old, "test", db)
+    assert first["matched"] == 0  # same name, other town: a new business, not the Casa Grande one
+    con = connect(db)
+    con.execute("UPDATE events SET event_date = '2026-10-01' WHERE kind = 'headcount_growth'")
+    con.commit()
+    con.close()
+    assert ingest("crustdata-companies", old, "test", db)["duplicate"]
+    ingest("crustdata-companies", new, "test", db)
+    con = connect(db)
+    con.execute("UPDATE events SET event_date = '2026-10-10' WHERE kind = 'headcount_growth' "
+                "AND event_date <> '2026-10-01'")
+    con.commit()
+    try:
+        assert _growing(con, date(2026, 10, 12)) == {"copper sky dental|eloy"}
+    finally:
+        con.close()
+    item = {"name": "Acme", "score": 3, "signals": [], "reasons": [], "locality": {"initiative": "hiring a CPA"}}
+    _boost(item, "plumber", growing=True)
+    assert item["signals"] == ["hiring"] and item["score"] == 5
