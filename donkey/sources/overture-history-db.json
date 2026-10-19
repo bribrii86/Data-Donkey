@@ -9,6 +9,8 @@
     "street": "street",
     "city": "city",
     "zip": "zip",
-    "vertical": "vertical"
+    "vertical": "vertical",
+    "phone": "phone",
+    "website": "website"
   }
 }

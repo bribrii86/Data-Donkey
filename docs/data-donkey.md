@@ -27,7 +27,7 @@ The SQLite schema has six tables:
 Identical file contents (the same SHA-256) are only ingested once, even if the
 file name changes. Names are normalized with `donkey.common.norm` (copied from the
 Stephanie app's `prospects._norm` at the v0.5.0 split; same results for ACP). A row is matched only when normalized names and ZIP or street
-agree. Ambiguous or insufficiently located same-name rows are retained in
+agree, or (v0.6.4) the phone and website keys settle it (see the last section). Ambiguous or insufficiently located same-name rows are retained in
 `records` with `match_status='needs_review'`; they are never auto-merged. Use
 `donkey.api.needs_review()` to retrieve that list.
 
@@ -334,3 +334,23 @@ stored as a `headcount_growth` event dated the import day.
 call-this-week then gives the `hiring` boost (+2, same signal as the who-decides one, never counted twice) to a listed
 business whose headcount grew in the 6 months before the export, for 180 days after the import. The export has no
 ZIP or street, so it matches on name and town.
+
+## Phone and website match keys (v0.6.4)
+
+Each business stores `phone_key` (10 digits; toll-free numbers are left out, chains share them) and `domain_key` (the
+website host without `www.`; Facebook, Yelp, LinkedIn, Wix, GoDaddy and other shared hosts are left out). Maps that
+carry them: `city-business-list` (Business Phone, Website; a plain "Phone" column stays the contact's, it can be
+an owner's cell), `overture-places`, `overture-history-db`, `crustdata-companies`
+(domain). Matching adds three rules on top of name + ZIP/street, and never merges otherwise:
+
+- Same name, new address in the same town, same phone, and no other same-name business stored: it moved; matched,
+  not stored twice. A shared domain alone never counts here (stores of a chain share one).
+- Same-name tie (several in the ZIP, or a Crustdata row with several in its town): exactly one with the same phone
+  or domain wins; otherwise the row stays `needs_review`.
+- Different spelling ("Sample Title And Escrow" vs "Sample Title Agency"): matched only when phone AND domain agree
+  with exactly one business whose name shares words with it and whose ZIP (when both are known) is the same.
+
+Doctors or tenants sharing a building phone and website keep separate rows (their names share no words). A match
+the keys decided adds no keys to the stored business. An older donkey.db gets the
+columns the first time it is opened, with keys filled from the stored source rows read through today's maps (one transaction);
+nothing to run. Matched rows don't change the stored address.

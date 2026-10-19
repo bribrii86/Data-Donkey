@@ -32,7 +32,82 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript((Path(__file__).parent / "schema.sql").read_text(encoding="utf8"))
     ucc.backfill(con)
+    _add_match_keys(con)
     return con
+
+
+# Toll-free lines are shared by every store of a chain; platform hosts by thousands of unrelated businesses.
+_TOLL_FREE = ("800", "833", "844", "855", "866", "877", "888")
+_SHARED_HOSTS = ("facebook.com", "fb.com", "instagram.com", "linkedin.com", "yelp.com", "google.com", "goo.gl",
+                 "business.site", "wixsite.com", "godaddysites.com", "square.site", "squarespace.com", "weebly.com",
+                 "wordpress.com", "blogspot.com", "linktr.ee", "yellowpages.com", "mapquest.com", "bbb.org",
+                 "nextdoor.com", "twitter.com", "x.com", "tiktok.com", "youtube.com", "gmail.com", "yahoo.com",
+                 "outlook.com", "hotmail.com", "aol.com", "icloud.com")
+
+
+def phone_key(value: str) -> str:
+    """10-digit US number, or "" (no number, wrong length, or toll-free)."""
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) == 11 and digits.startswith("1"):
+        digits = digits[1:]
+    return digits if len(digits) == 10 and not digits.startswith(_TOLL_FREE) else ""
+
+
+def domain_key(value: str) -> str:
+    """The website's host without www ("https://www.Example.com/about" -> "example.com"), or "" for social and
+    site-builder hosts, which unrelated businesses share."""
+    host = re.sub(r"^[a-z][a-z0-9+.-]*://", "", (value or "").strip().casefold())
+    host = re.split(r"[/?#:]", host, maxsplit=1)[0].removeprefix("www.").strip(".")
+    if "." not in host or " " in host or any(host == h or host.endswith("." + h) for h in _SHARED_HOSTS):
+        return ""
+    return host
+
+
+def _add_match_keys(con: sqlite3.Connection) -> None:
+    """v0.6.4: phone and website-domain keys on businesses. A donkey.db from before gets the columns and its keys
+    filled from the stored source rows (read again through today's maps) in one transaction, so a crash or a second
+    process opening the file at the same time never leaves it half done. Not in schema.sql: its indexes would fail on
+    an older file before the columns exist."""
+    if "phone_key" not in {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}:
+        con.execute("BEGIN IMMEDIATE")
+        try:
+            if "phone_key" not in {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}:
+                con.execute("ALTER TABLE businesses ADD COLUMN phone_key TEXT NOT NULL DEFAULT ''")
+                con.execute("ALTER TABLE businesses ADD COLUMN domain_key TEXT NOT NULL DEFAULT ''")
+                _backfill_keys(con)
+            con.execute("COMMIT")
+        except BaseException:
+            con.execute("ROLLBACK")
+            raise
+    con.execute("CREATE INDEX IF NOT EXISTS idx_businesses_phone ON businesses(phone_key)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_businesses_domain ON businesses(domain_key)")
+
+
+def _backfill_keys(con: sqlite3.Connection) -> None:
+    maps: dict[str, dict[str, Any] | None] = {}
+    for row in con.execute("SELECT source_id, raw_json, business_id FROM records WHERE business_id IS NOT NULL "
+                           "ORDER BY id").fetchall():
+        if row["source_id"] not in maps:
+            try:
+                maps[row["source_id"]] = load_source(row["source_id"])
+            except ValueError:  # a map since removed or renamed: those rows just get no keys
+                maps[row["source_id"]] = None
+        mapping = maps[row["source_id"]]
+        try:
+            raw = json.loads(row["raw_json"])
+        except ValueError:
+            continue
+        if mapping and isinstance(raw, dict):
+            _set_keys(con, row["business_id"], _mapped_values(raw, mapping["columns"]))
+
+
+def _set_keys(con: sqlite3.Connection, business_id: int, values: dict[str, str]) -> None:
+    """Fill a business's empty phone/domain keys; a key already stored is kept."""
+    phone, domain = phone_key(values.get("phone", "")), domain_key(values.get("website", ""))
+    if phone or domain:
+        con.execute("""UPDATE businesses SET phone_key = CASE WHEN phone_key = '' THEN ? ELSE phone_key END,
+                       domain_key = CASE WHEN domain_key = '' THEN ? ELSE domain_key END WHERE id = ?""",
+                    (phone, domain, business_id))
 
 
 def load_source(source_id: str) -> dict[str, Any]:
@@ -116,48 +191,84 @@ def _iso_date(value: str) -> str:
     return parsed.isoformat() if parsed else ""
 
 
+def _alike(a: str, b: str) -> bool:
+    """Two names that could be one business written two ways: one's words inside the other's, or two shared."""
+    x, y = set(a.split()), set(b.split())
+    return bool(x and y) and (x <= y or y <= x or len(x & y) >= 2)
+
+
 def _find_business(
     con: sqlite3.Connection, values: dict[str, str], by_city: bool = False,
 ) -> tuple[int | None, str, list[int]]:
-    """by_city: a file with a town but no street or ZIP (Crustdata) only matches a same-name business in that town."""
+    """by_city: a file with a town but no street or ZIP (Crustdata) only matches a same-name business in that town.
+    v0.6.4 phone and website-domain keys settle what name + place can't, and never merge otherwise:
+    - the only same-name business in the same town, at a new address with the same phone, has moved;
+    - a same-name tie is broken when exactly one of them has the same phone or domain;
+    - a name written another way ("Sample Title And Escrow" / "Sample Title Agency") matches when phone AND domain
+      agree, the names share words and the ZIPs (when both known) agree."""
     name = values.get("name", "").strip()
     normalized = _norm(name) if name else ""
     if not normalized:
         return None, "needs_review", []
+    phone, domain = phone_key(values.get("phone", "")), domain_key(values.get("website", ""))
+
+    def keyed(rows):
+        return [row for row in rows if (phone and row["phone_key"] == phone) or (domain and row["domain_key"] == domain)]
+
+    def found(business_id: int, fill: bool = True) -> tuple[int, str, list[int]]:
+        if fill:  # a match the keys decided adds no keys: a store could take a sister store's phone
+            _set_keys(con, business_id, values)
+        return business_id, "matched", []
+
     same_name = con.execute(
-        "SELECT id, zip, street, city FROM businesses WHERE normalized_name = ? ORDER BY id",
+        "SELECT id, zip, street, city, phone_key, domain_key FROM businesses WHERE normalized_name = ? ORDER BY id",
         (normalized,),
     ).fetchall()
     zip_code = re.sub(r"\D", "", values.get("zip", ""))
     street = _street_norm(values.get("street", "") or values.get("address", ""))
+    city = values.get("city", "").strip().casefold()
     location_matches = [
         row for row in same_name
         if (zip_code and re.sub(r"\D", "", row["zip"]) == zip_code)
         or (street and _street_norm(row["street"]) == street)
     ]
     if len(location_matches) == 1:
-        return int(location_matches[0]["id"]), "matched", []
+        return found(int(location_matches[0]["id"]))
     if len(location_matches) > 1:
+        if len(keyed(location_matches)) == 1:
+            return found(int(keyed(location_matches)[0]["id"]), fill=False)
         return None, "needs_review", [int(row["id"]) for row in location_matches]
+    if (zip_code or street) and phone and len(same_name) == 1:  # a domain alone could be a chain's
+        old = same_name[0]
+        if old["phone_key"] == phone and city and (old["city"] or "").strip().casefold() == city:
+            return found(int(old["id"]), fill=False)
     if by_city and not (zip_code or street):
-        city = values.get("city", "").strip().casefold()
         same_name = [row for row in same_name if city and (row["city"] or "").strip().casefold() == city]
     if same_name and not (zip_code or street):
         if len(same_name) == 1:
-            return int(same_name[0]["id"]), "matched", []
+            return found(int(same_name[0]["id"]))
+        if len(keyed(same_name)) == 1:
+            return found(int(keyed(same_name)[0]["id"]), fill=False)
         return None, "needs_review", [int(row["id"]) for row in same_name]
+    if phone and domain:
+        both = [row for row in con.execute(
+            "SELECT id, normalized_name, zip FROM businesses WHERE phone_key = ? AND domain_key = ?", (phone, domain))
+            if _alike(row["normalized_name"], normalized)
+            and not (zip_code and row["zip"] and re.sub(r"\D", "", row["zip"]) != zip_code)]
+        if len(both) == 1:
+            return found(int(both[0]["id"]), fill=False)
 
     now = datetime.now(timezone.utc).isoformat()
     cursor = con.execute(
         """INSERT INTO businesses
         (name, normalized_name, address, street, city, state, zip, vertical,
-         license_number, open_date, naics, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+         license_number, open_date, naics, created_at, updated_at, phone_key, domain_key)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             name, normalized, values.get("address", ""), values.get("street", "") or values.get("address", ""),
             values.get("city", ""), values.get("state", ""), values.get("zip", ""),
             values.get("vertical", ""), values.get("license_number", ""), values.get("open_date", ""),
-            values.get("naics", ""), now, now,
+            values.get("naics", ""), now, now, phone, domain,
         ),
     )
     return int(cursor.lastrowid), "new", []

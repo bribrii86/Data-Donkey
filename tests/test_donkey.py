@@ -170,7 +170,7 @@ def test_overture_jsonl_nested_columns(tmp_path):
 
 def test_donkey_version_and_custom_db_env(monkeypatch, tmp_path):
     monkeypatch.setenv("DONKEY_DB", str(tmp_path / "custom.db"))
-    assert __version__ == "0.6.3"
+    assert __version__ == "0.6.4"
     con = connect()
     try:
         assert con.execute("SELECT COUNT(*) FROM sources").fetchone()[0] == 0

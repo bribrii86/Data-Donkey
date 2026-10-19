@@ -6,6 +6,12 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-19)
+- v0.6.4: phone and website match keys (Buck flagged Fable's business-plan gap 2026-10-19 13:11 UTC). businesses gets
+  `phone_key` (10 digits, no toll-free) and `domain_key` (host, no social/site-builder hosts); city-business-list (Business
+  Phone, Website) and both Overture maps map them. Only same-name row + same town + new address + same phone = moved;
+  a same-name tie is broken by exactly one shared phone or domain; a different spelling needs phone AND domain plus
+  shared name words and same ZIP. An older donkey.db gets the columns and keys from stored rows when opened, in one
+  transaction (`ingest._add_match_keys`). Sonnet review fixes: no merges of clinic tenants or chain stores.
 - v0.6.3: `crustdata-companies` source map (Buck said yes 2026-10-19 05:53 UTC). A Crustdata company export (CSV,
   LinkedIn-based) is stored as `headcount_growth` events (Arizona rows only, town from headquarters, dated the import
   day); call-this-week gives the `hiring` boost to a listed business whose headcount grew (name + town match, 180
