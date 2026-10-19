@@ -360,8 +360,9 @@ nothing to run. Matched rows don't change the stored address.
 Source map `city-licenses` is `city-business-list` plus an issue date: each row is also a `new_license` event dated
 its Issue Date, and call-this-week scores it 3 points (like a formation notice) for 60 days. Cities reissue every
 renewal on Jan 1 and the list has no new/renewal flag, so a license dated Jan 1 never scores (a real Jan 1 opening is missed, and a renewal issued on another
-day still scores). A file without an
-issue-date column is refused. Dates may be ISO or the city export's MM-DD-YYYY. A file already
+day still scores). Home businesses don't score either: a
+license whose legal name is a person (no LLC, Inc, church, school...) at an apartment or a lane/court/drive-type street
+(`triggers.looks_home_based`; Buck 2026-10-19 23:21 UTC). A file without an issue-date column is refused. Dates may be ISO or the city export's MM-DD-YYYY. A file already
 ingested under another map (same bytes) is refused with a note naming that map.
 
     python -m donkey ingest --source city-licenses --file casa_grande_licenses_2026.csv --received-from "Casa Grande NextRequest 26-330"

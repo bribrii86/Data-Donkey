@@ -8,7 +8,8 @@ Docs: docs/data-donkey.md.
 ## Current state (2026-10-19)
 - v0.6.5 (stacked on v0.6.4 / PR #13; Buck chose "Yes, 60 days" 2026-10-19 16:17 UTC): source map `city-licenses`
   (city-business-list + Issue Date as a `new_license` event); call-this-week scores a license 3 points for 60 days,
-  never one dated Jan 1 (annual renewals). parse_date reads MM-DD-YYYY. First file: Casa Grande NextRequest #26-330
+  never one dated Jan 1 (annual renewals), a kiosk (ECOATM LLC) or a home business (person's legal name at an
+  apartment/lane/court/drive address; Buck yes 2026-10-19 23:21 UTC). parse_date reads MM-DD-YYYY. First file: Casa Grande NextRequest #26-330
   (1,176 licenses, 2026 only; project files data/casa_grande/, never the repo). Same bytes already ingested under
   another map are refused with a note naming it (batches are unique by SHA-256 across maps).
 - v0.6.4: phone and website match keys (Buck flagged Fable's business-plan gap 2026-10-19 13:11 UTC). businesses gets

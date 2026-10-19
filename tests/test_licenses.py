@@ -5,6 +5,7 @@ from datetime import date
 import pytest
 
 from donkey import api
+from donkey.triggers import looks_home_based
 from donkey.ingest import ingest, main
 
 TODAY = date(2026, 10, 19)
@@ -61,6 +62,8 @@ def test_window_edges_kiosks_and_one_signal_per_business(tmp_path):
         ["Twice Test Cafe", "", "5 Test St", "Casa Grande", "AZ", "85122", "BL-6", "2026-10-02", "Retailer"],
         ["Blank Test Date", "", "6 Test St", "Casa Grande", "AZ", "85122", "BL-7", "", "Service"],
         ["Town Only Test Shop", "", "7 Test St", "Coolidge", "AZ", "", "BL-8", "2026-10-03", "Service"],
+        ["Sample Test Cleaning LLC", "Pat Example", "8 N Test Rd Apt 12", "Casa Grande", "AZ", "85122", "BL-10",
+         "2026-10-03", "Service"],  # a person's own license at an apartment: home business
     ]
     ingest("city-licenses", _licenses(tmp_path / "lic.csv", rows), "test", db)
     hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)}
@@ -76,3 +79,12 @@ def test_same_file_under_city_business_list_first_is_named(tmp_path, monkeypatch
     capsys.readouterr()
     assert main(["ingest", "--source", "city-licenses", "--file", str(path), "--received-from", "t"]) == 0
     assert "Already ingested with --source city-business-list" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("legal, street, home", [
+    ("Pat Example", "8 N Test Rd Apt 12", True), ("Pat Q. Example", "12 E Sample Ln", True),
+    ("Pat Example", "9 E Test Blvd Ste 3", False), ("Sample Test Cleaning LLC", "12 E Sample Ln", False),
+    ("Grace Test Church", "1 E Test Ln", False), ("", "12 E Sample Ln", False),
+])
+def test_home_based(legal, street, home):
+    assert looks_home_based(legal, street) is home

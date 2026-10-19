@@ -19,7 +19,7 @@ from . import areas, locality, ucc
 from .common import database_path, parse_date
 from .common import norm as _norm
 
-__all__ = ["SCORES", "Scorer", "call_this_week", "lease_calendar", "looks_print_heavy"]
+__all__ = ["SCORES", "Scorer", "call_this_week", "lease_calendar", "looks_home_based", "looks_print_heavy"]
 
 # Points per trigger. Tune here; a business at min_score or more is a "call this week".
 SCORES = {
@@ -219,6 +219,23 @@ def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
                "address_type": details.get("address_type", ""), "newspaper": details.get("newspaper", "")}
 
 
+# v0.6.5: a license held in a person's own name at a home address (apartment, or a lane/court/drive-type street) is a
+# home business, a weak copier prospect; it stays stored but doesn't score. Checked on the legal name, not the DBA.
+_ENTITY_WORDS = re.compile(
+    r"\b(llc|l\.l\.c|inc|corp|corporation|co|company|lp|llp|pllc|pc|ltd|group|church|school|academy|clinic|center|"
+    r"services?|enterprises?|associates|partners|trust|foundation|order|club|district|county|city|of|and)\b|&",
+    re.IGNORECASE)
+_HOME_ADDRESS = re.compile(r"\b(apt|unit|lot|spc|space)\b|#|\b(ln|lane|ct|court|trl|trail|pl|place|cir|circle|way|dr|"
+                           r"drive)\.?$", re.IGNORECASE)
+
+
+def looks_home_based(legal_name: str, street: str) -> bool:
+    words = (legal_name or "").split()
+    person = 2 <= len(words) <= 4 and not _ENTITY_WORDS.search(legal_name) and all(
+        re.fullmatch(r"[A-Za-z.'-]+", w) for w in words)
+    return person and bool(_HOME_ADDRESS.search((street or "").strip()))
+
+
 def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
     """v0.6.5: city business licenses (source map city-licenses). Cities reissue every renewal on Jan 1 and the list
     has no new/renewal flag, so a Jan 1 issue date never scores."""
@@ -230,7 +247,8 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
         name, zip_code = details.get("name", ""), details.get("zip", "")
         # licenses carry the legal suffix ("ECOATM LLC"), which looks_like_kiosk reads as a real company: drop it first
         bare = re.sub(r"[\s,]+(llc|l\.l\.c\.?|inc\.?|corp\.?|co\.?)$", "", name.strip(), flags=re.IGNORECASE)
-        if row["event_date"][5:10] == "01-01" or looks_like_kiosk(bare):
+        if row["event_date"][5:10] == "01-01" or looks_like_kiosk(bare) or \
+                looks_home_based(details.get("legal_name", ""), details.get("street", "")):
             continue
         if area and not areas.contains(area, zip_code, row["town"] or ""):
             continue
