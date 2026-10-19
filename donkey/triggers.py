@@ -225,14 +225,16 @@ _ENTITY_WORDS = re.compile(
     r"\b(llc|l\.l\.c|inc|corp|corporation|co|company|lp|llp|pllc|pc|ltd|group|church|school|academy|clinic|center|"
     r"services?|enterprises?|associates|partners|trust|foundation|order|club|district|county|city|of|and)\b|&",
     re.IGNORECASE)
-_HOME_ADDRESS = re.compile(r"\b(apt|unit|lot|spc|space)\b|#|\b(ln|lane|ct|court|trl|trail|pl|place|cir|circle|way|dr|"
-                           r"drive)\.?$", re.IGNORECASE)
+_HOME_ADDRESS = re.compile(r"\b(apt|spc|lot)\b|\b(ln|lane|ct|court|trl|trail|pl|place|cir|circle|way|dr|drive)\.?$",
+                           re.IGNORECASE)  # not "unit"/"#"/"ste": shops and offices use those
 
 
-def looks_home_based(legal_name: str, street: str) -> bool:
+def looks_home_based(legal_name: str, street: str, dba: str = "") -> bool:
+    """A person's own license (legal name of 2-4 plain words, none an entity word, and not the trade name itself, as
+    "Desert Sun Tire" would be) at an apartment, mobile-home lot or a lane/court/drive-type street."""
     words = (legal_name or "").split()
     person = 2 <= len(words) <= 4 and not _ENTITY_WORDS.search(legal_name) and all(
-        re.fullmatch(r"[A-Za-z.'-]+", w) for w in words)
+        re.fullmatch(r"[A-Za-z.'-]+", w) for w in words) and _norm(legal_name) != _norm(dba or "")
     return person and bool(_HOME_ADDRESS.search((street or "").strip()))
 
 
@@ -248,7 +250,7 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
         # licenses carry the legal suffix ("ECOATM LLC"), which looks_like_kiosk reads as a real company: drop it first
         bare = re.sub(r"[\s,]+(llc|l\.l\.c\.?|inc\.?|corp\.?|co\.?)$", "", name.strip(), flags=re.IGNORECASE)
         if row["event_date"][5:10] == "01-01" or looks_like_kiosk(bare) or \
-                looks_home_based(details.get("legal_name", ""), details.get("street", "")):
+                looks_home_based(details.get("legal_name", ""), details.get("street", ""), name):
             continue
         if area and not areas.contains(area, zip_code, row["town"] or ""):
             continue

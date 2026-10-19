@@ -81,10 +81,13 @@ def test_same_file_under_city_business_list_first_is_named(tmp_path, monkeypatch
     assert "Already ingested with --source city-business-list" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("legal, street, home", [
-    ("Pat Example", "8 N Test Rd Apt 12", True), ("Pat Q. Example", "12 E Sample Ln", True),
-    ("Pat Example", "9 E Test Blvd Ste 3", False), ("Sample Test Cleaning LLC", "12 E Sample Ln", False),
-    ("Grace Test Church", "1 E Test Ln", False), ("", "12 E Sample Ln", False),
+@pytest.mark.parametrize("legal, street, dba, home", [
+    ("Pat Example", "8 N Test Rd Apt 12", "Sample Cleaning", True), ("Pat Q. Example", "12 E Sample Ln", "", True),
+    ("Pat Example", "9 E Test Blvd Ste 3", "Sample Cleaning", False),
+    ("Pat Example", "9 E Test Blvd Unit B", "Sample Cleaning", False),  # a shop suite, not a home
+    ("Sample Test Cleaning LLC", "12 E Sample Ln", "", False), ("Grace Test Church", "1 E Test Ln", "", False),
+    ("Desert Test Tire", "40 W Test Dr", "Desert Test Tire", False),  # the trade name itself, not a person
+    ("", "12 E Sample Ln", "", False),
 ])
-def test_home_based(legal, street, home):
-    assert looks_home_based(legal, street) is home
+def test_home_based(legal, street, dba, home):
+    assert looks_home_based(legal, street, dba) is home
