@@ -248,6 +248,11 @@ def test_lease_calendar_by_month(tmp_path, capsys, monkeypatch):
     ("Pinal Family Law PLLC", "", True), ("Desert CPA Group", "", True), ("Valley Realty", "", True),
     ("Sun Dental", "", True), ("Casa Grande Prep Academy", "", True), ("Acme LLC", "accounting", True),
     ("Desert Rose Plumbing", "plumber", False), ("Title Boxing Club", "", False), ("Maricopa Tacos", "", False),
+    ("Acme", "insurance_agency", True), ("Acme", "elementary_school", True), ("Acme", "real_estate_agent", True),
+    ("Acme", "tax_services_and_computation", True), ("Casa Grande Union High School", "", True),
+    ("Church's Chicken", "", False), ("Academy Sports", "", False), ("Charter Communications", "", False),
+    ("University Pizza", "", False), ("Truck Driving School", "", False), ("Law Enforcement Supply", "", False),
+    ("Green Lawn Care", "", False), ("Grace Church", "church", False),
 ])
 def test_print_heavy_names(name, category, heavy):
     from donkey.triggers import looks_print_heavy
@@ -268,3 +273,25 @@ def test_hiring_boost_from_who_decides_answer(tmp_path):
     hit = api.call_this_week("stephanie", as_of="2026-10-12", db_path=db)[0]
     assert hit["name"] == "Desert Rose Plumbing" and hit["score"] == 7
     assert hit["signals"] == ["home_to_office", "hiring"] and hit["reasons"][-1] == "hiring or expanding"
+
+
+@pytest.mark.parametrize("initiative, hiring", [
+    ("Hiring two front desk staff", True), ("job posts for admin help", True), ("opening another office", True),
+    ("not hiring right now", False), ("no expansion plans this year", False), ("opening about spring", False),
+])
+def test_hiring_words(initiative, hiring):
+    from donkey.triggers import _boost
+    item = {"name": "Acme", "score": 3, "signals": [], "reasons": [], "locality": {"initiative": initiative}}
+    _boost(item, "plumber")
+    assert ("hiring" in item["signals"]) is hiring
+
+
+def test_lease_calendar_drops_repeats_and_dead_filings(tmp_path):
+    db = tmp_path / "donkey.db"
+    rows = INDEX_ROWS + [["202200000006", "02/20/2022", "Example Law Office", "Maricopa", "85138",
+                          "De Lage Landen Financial Services Inc", "Active", ""],
+                         ["202200000007", "03/01/2022", "Sample Insurance Agency", "Maricopa", "85138",
+                          "GreatAmerica Financial Services", "Terminated", ""]]
+    ingest("az-sos-ucc-index", _tsv(tmp_path / "idx.txt", INDEX_HEADER, rows), "AZ SOS (synthetic)", db)
+    cal = api.lease_calendar("stephanie", as_of="2026-10-12", months=12, db_path=db)
+    assert [r["name"] for r in cal] == ["Example Law Office"]

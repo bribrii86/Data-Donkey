@@ -84,11 +84,17 @@ REASONS = {
     "hiring": "hiring or expanding",
 }
 _PRINT_HEAVY = re.compile(
-    r"\b(law|attorneys?|legal|lawyers?|paralegal|cpas?|accounting|accountants?|tax (service|prep|preparation)|"
-    r"title (company|agency|insurance)|escrow|realty|real estate|realtors?|mortgage|insurance|schools?|academy|"
-    r"charter|preschool|learning center|college|university|church)\b", re.IGNORECASE)
-_HIRING = re.compile(r"hiring|job (post|opening|listing)s?|recruit|new (location|office|branch)|expan|"
-                     r"second location|opening (a|another)", re.IGNORECASE)
+    r"\b(law(?! enforcement)|attorneys?|lawyers?|legal (services?|aid)|paralegal|cpas?|"
+    r"accounting|accountants?|tax (services?|prep|preparation)|title (company|agency|insurance)|escrow|realty|"
+    r"real estate|realtors?|mortgage|insurance|preschool|learning center|college)\b"
+    r"|\b(elementary|middle|high|charter|private|public|montessori|christian|prep|preparatory) (schools?|academy)\b"
+    r"|\b(schools?|school district|unified|university)\b", re.IGNORECASE)
+_NOT_PRINT_HEAVY = re.compile(r"\b(driving|truck|cdl|dance|karate|martial|swim\w*|beauty|barber|cosmetology|pizza|"
+                              r"grill|sports?|chicken)\b", re.IGNORECASE)
+_HIRING = re.compile(r"\b(hiring|job (posts?|openings?|listings?)|recruit\w*|new (location|office|branch)|expan\w*|"
+                     r"second location|opening (a|another)\b)", re.IGNORECASE)
+_NOT_HIRING = re.compile(r"\b(no|not|none|nothing)\b.{0,20}\b(hiring|expan\w*|job)", re.IGNORECASE)
+_DEAD_FILING = re.compile(r"terminat|lapse|released|expired", re.IGNORECASE)
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
 # {"name", "zip", "town", "score", "signal", "date"} plus anything else worth showing.
@@ -260,15 +266,17 @@ def call_this_week(
 
 
 def looks_print_heavy(name: str, category: str = "") -> bool:
-    text = f"{name} {category}"
-    return bool(_PRINT_HEAVY.search(text)) or locality.looks_medical(name, category)
+    text = f"{name} {category}".replace("_", " ")  # Overture categories: elementary_school, insurance_agency
+    return (bool(_PRINT_HEAVY.search(text)) and not _NOT_PRINT_HEAVY.search(text)) or \
+        locality.looks_medical(name, category)
 
 
 def _boost(item: dict, category: str) -> None:
     """v0.6.2 boosts on a listed business: heavy-print line of work, and hiring or expanding per its who-decides
     answer (the initiative line)."""
+    initiative = (item.get("locality") or {}).get("initiative") or ""
     hits = {"print_heavy": looks_print_heavy(item["name"], category),
-            "hiring": bool(_HIRING.search((item.get("locality") or {}).get("initiative") or ""))}
+            "hiring": bool(_HIRING.search(initiative)) and not _NOT_HIRING.search(initiative)}
     for signal, found in hits.items():
         if found and signal not in item["signals"]:
             item["score"] += SCORES[signal]
@@ -312,13 +320,20 @@ def lease_calendar(
     con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        rows = []
+        rows, seen = [], set()
         for base, details, filed in _ucc_rows(con, area_def):
             end = parse_date(details.get("lease_end_est", "")) if details.get("lease_end_est") else None
-            if details.get("lessor_type") in kinds and end and start <= end <= stop:
+            if details.get("lessor_type") not in kinds or not end or not start <= end <= stop:
+                continue
+            if _DEAD_FILING.search(details.get("lien_status") or ""):
+                continue
+            # Amendments and continuations repeat a filing; show a business once per lessor and end month.
+            key = (_key(base["name"], base["zip"]), _norm(base["secured_party"]), end.strftime("%Y-%m"))
+            if key not in seen:
+                seen.add(key)
                 rows.append({**base, "month": end.strftime("%Y-%m"), "lease_end_est": end.isoformat(),
-                             "lease_window_start": details.get("lease_window_start", ""),
-                             "filed": filed.isoformat() if filed else "", "lessor_type": details["lessor_type"]})
+                                 "lease_window_start": details.get("lease_window_start", ""),
+                                 "filed": filed.isoformat() if filed else "", "lessor_type": details["lessor_type"]})
         for row, answer in zip(rows, locality.for_items(rows, con, today)):
             row["who_decides"] = answer["value"]
     finally:
