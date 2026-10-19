@@ -93,7 +93,9 @@ _NOT_PRINT_HEAVY = re.compile(r"\b(driving|truck|cdl|dance|karate|martial|swim\w
                               r"grill|sports?|chicken)\b", re.IGNORECASE)
 _HIRING = re.compile(r"\b(hiring|job (posts?|openings?|listings?)|recruit\w*|new (location|office|branch)|expan\w*|"
                      r"second location|opening (a|another)\b)", re.IGNORECASE)
-_NOT_HIRING = re.compile(r"\b(no|not|none|nothing)\b.{0,20}\b(hiring|expan\w*|job)", re.IGNORECASE)
+_NOT_HIRING = re.compile(r"\b(no|not|none|nothing)\s+(currently\s+|actively\s+|planned\s+|planning\s+)?"
+                         r"(hiring|expan\w*|job (posts?|openings?|listings?)|new (location|office|branch))\w*( plans?)?",
+                         re.IGNORECASE)
 _DEAD_FILING = re.compile(r"terminat|lapse|released|expired", re.IGNORECASE)
 
 # A scorer gets (read-only connection, area or None, as_of date, since date) and returns hits:
@@ -139,7 +141,7 @@ def _ucc_rows(con: sqlite3.Connection, area: dict | None) -> Iterable[tuple[dict
         details = json.loads(row["details_json"])
         if "lessor_type" not in details:  # stored before v0.5.2 in a database opened read-only here
             details.update(ucc.enrich({"secured_party": details.get("secured_party", ""),
-                                       "event_date": row["event_date"] or ""}))
+                                   "event_date": row["event_date"] or ""}))
         name = row["business_name"] or details.get("name", "")
         zip_code = details.get("zip") or row["business_zip"] or ""
         town = row["town"] or row["business_city"] or ""
@@ -276,7 +278,7 @@ def _boost(item: dict, category: str) -> None:
     answer (the initiative line)."""
     initiative = (item.get("locality") or {}).get("initiative") or ""
     hits = {"print_heavy": looks_print_heavy(item["name"], category),
-            "hiring": bool(_HIRING.search(initiative)) and not _NOT_HIRING.search(initiative)}
+            "hiring": bool(_HIRING.search(_NOT_HIRING.sub("", initiative)))}  # drop "not hiring" first
     for signal, found in hits.items():
         if found and signal not in item["signals"]:
             item["score"] += SCORES[signal]
@@ -332,8 +334,8 @@ def lease_calendar(
             if key not in seen:
                 seen.add(key)
                 rows.append({**base, "month": end.strftime("%Y-%m"), "lease_end_est": end.isoformat(),
-                                 "lease_window_start": details.get("lease_window_start", ""),
-                                 "filed": filed.isoformat() if filed else "", "lessor_type": details["lessor_type"]})
+                             "lease_window_start": details.get("lease_window_start", ""),
+                             "filed": filed.isoformat() if filed else "", "lessor_type": details["lessor_type"]})
         for row, answer in zip(rows, locality.for_items(rows, con, today)):
             row["who_decides"] = answer["value"]
     finally:

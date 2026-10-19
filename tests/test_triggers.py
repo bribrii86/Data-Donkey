@@ -278,6 +278,7 @@ def test_hiring_boost_from_who_decides_answer(tmp_path):
 @pytest.mark.parametrize("initiative, hiring", [
     ("Hiring two front desk staff", True), ("job posts for admin help", True), ("opening another office", True),
     ("not hiring right now", False), ("no expansion plans this year", False), ("opening about spring", False),
+    ("Not a franchise; hiring cashiers", True), ("not hiring but expanding to a second location", True),
 ])
 def test_hiring_words(initiative, hiring):
     from donkey.triggers import _boost
