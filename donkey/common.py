@@ -30,7 +30,7 @@ def norm(name: str) -> str:
 
 
 def parse_date(s: str) -> date | None:
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%Y%m%d", "%d-%b-%Y", "%b %d, %Y", "%b, %d, %Y"):
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%m-%d-%Y", "%Y%m%d", "%d-%b-%Y", "%b %d, %Y", "%b, %d, %Y"):
         try:
             return datetime.strptime(s.strip(), fmt).date()
         except ValueError:

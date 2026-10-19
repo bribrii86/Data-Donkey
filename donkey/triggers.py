@@ -31,6 +31,7 @@ SCORES = {
     "sba_loan": 3,  # SBA 7(a)/504 loan approved within SBA_LOOKBACK_DAYS: financing to grow or buy a business
     "new_llc": 3,  # new LLC or corporation formed within NEW_LLC_LOOKBACK_DAYS: setting up an office now
     "new_llc_agent": 3,  # same, but the notice only gives the statutory agent's address (often a lawyer's office)
+    "new_license": 3,  # city business license issued within NEW_LICENSE_LOOKBACK_DAYS (not a Jan 1 renewal)
     "board_intent_plus": 4,  # a public body plans to buy, opened an RFP, or has a contract or lease ending
     "board_vendor": 3,  # a public body named its current vendor or contract terms
     "board_intent_minus": 0,  # declined or tabled a purchase: shown as a reason, never a reason to call
@@ -44,6 +45,7 @@ LEASE_LEAD_DAYS = 180  # start calling six months before the estimated lease end
 GROWTH_LOOKBACK_DAYS = 180  # a Crustdata export's 6-month headcount growth stays useful about this long
 SBA_LOOKBACK_DAYS = 180  # SBA publishes quarterly, so a loan is weeks to months old when it arrives
 BOARD_LOOKBACK_DAYS = 45  # boards move slowly; a vote or RFP stays worth acting on for weeks
+NEW_LICENSE_LOOKBACK_DAYS = 60  # a records request arrives weeks after issue; a new license stays worth a call ~2 months
 NEW_LLC_LOOKBACK_DAYS = 60  # the notice runs up to 60 days after approval, so the formation date is already weeks old
 # LLCs named after a street address ("408 N. Sacaton Street LLC") or called holdings are usually a building's owner,
 # not a business that will set up an office; they stay in the store but don't score.
@@ -77,6 +79,7 @@ REASONS = {
     "sba_loan": "SBA loan approved",
     "new_llc": "new business formed (formation notice)",
     "new_llc_agent": "new business formed (formation notice; address is the statutory agent's, look it up first)",
+    "new_license": "new city business license",
     "board_intent_plus": "board meeting: plans to buy or contract ending",
     "board_vendor": "board meeting named their vendor or contract",
     "board_intent_minus": "board meeting: purchase declined or tabled",
@@ -216,6 +219,24 @@ def _new_llc_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
                "address_type": details.get("address_type", ""), "newspaper": details.get("newspaper", "")}
 
 
+def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
+    """v0.6.5: city business licenses (source map city-licenses). Cities reissue every renewal on Jan 1 and the list
+    has no new/renewal flag, so a Jan 1 issue date never scores."""
+    start = (as_of - timedelta(days=NEW_LICENSE_LOOKBACK_DAYS)).isoformat()
+    rows = con.execute("SELECT * FROM events WHERE kind = 'new_license' AND event_date >= ? AND event_date <= ?",
+                       (start, as_of.isoformat()))
+    for row in rows:
+        details = json.loads(row["details_json"])
+        name, zip_code = details.get("name", ""), details.get("zip", "")
+        if row["event_date"][5:10] == "01-01" or looks_like_kiosk(name):
+            continue
+        if area and not areas.contains(area, zip_code, row["town"] or ""):
+            continue
+        yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_license"],
+               "signal": "new_license", "date": row["event_date"], "license_number": details.get("license_number", ""),
+               "classification": details.get("classification", "")}
+
+
 def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
     start = (as_of - timedelta(days=BOARD_LOOKBACK_DAYS)).isoformat()
     rows = con.execute("SELECT * FROM events WHERE kind = 'board_minutes' AND event_date >= ? AND event_date <= ?",
@@ -242,7 +263,8 @@ def call_this_week(
 ) -> list[dict]:
     """Businesses to call this week in a named area (areas.json), highest score first. Points from all triggers in
     the last `days` days (lease-ending triggers count while the lease end is near; SBA loans for
-    SBA_LOOKBACK_DAYS, formation notices for NEW_LLC_LOOKBACK_DAYS) are added per business."""
+    SBA_LOOKBACK_DAYS, formation notices for NEW_LLC_LOOKBACK_DAYS, city licenses for NEW_LICENSE_LOOKBACK_DAYS) are
+    added per business."""
     today = as_of if isinstance(as_of, date) else (parse_date(as_of) if as_of else date.today())
     if today is None:
         raise ValueError(f"bad as_of date {as_of!r}")
@@ -252,7 +274,7 @@ def call_this_week(
     con.row_factory = sqlite3.Row
     try:
         board = list(_board_hits(con, area_def, today, since))
-        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, _new_llc_hits, *scorers)
+        hits = [hit for scorer in (_growth_hits, _ucc_hits, _sba_hits, _new_llc_hits, _license_hits, *scorers)
                 for hit in scorer(con, area_def, today, since)] + board
         ranked = _rank(hits, min_score)
         for item, answer in zip(ranked, locality.for_items(ranked, con, today)):
