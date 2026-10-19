@@ -123,3 +123,35 @@ def test_cli_crawl_ab_reports_missing_pages(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-not-real")
     assert main(["crawl-ab", "--town", "Eloy", "--dry-run"]) == 1
     assert "no pages to fetch" in capsys.readouterr().err
+
+
+class RefusingMessages(FakeMessages):
+    def create(self, model, prompt):
+        self.prompts.append(prompt)
+        if len(self.prompts) == 1:
+            return "", {"input_tokens": 10_000, "output_tokens": 100, "refused": True}
+        raise TimeoutError("read timed out")
+
+
+def test_refusal_is_billed_and_a_timeout_does_not_stop_the_run():
+    pages = [{"url": f"https://dir.test/{n}", "skipped": "", "markdown": "Shop"} for n in "abc"]
+    done = crawl.extract_rows(pages, "Maricopa", RefusingMessages(), crawl.DEFAULT_MODEL, 200, runner.COLUMNS,
+                              "2026-10-19")
+    assert done["usage"]["calls"] == 1 and done["usage"]["input_tokens"] == 10_000 and done["cost_cents"] > 0
+    assert len(done["errors"]) == 3 and "declined" in done["errors"][0] and "timed out" in done["errors"][1]
+
+
+def test_price_follows_the_model_that_served_the_call():
+    class Fallback(FakeMessages):
+        def create(self, model, prompt):
+            return REPLY, {"input_tokens": 10_000, "output_tokens": 500, "model": "claude-haiku-5-5"}
+    pages = [{"url": "https://dir.test/a", "skipped": "", "markdown": "Shop"}]
+    done = crawl.extract_rows(pages, "Maricopa", Fallback(), crawl.DEFAULT_MODEL, 200, runner.COLUMNS, "2026-10-19")
+    assert done["cost_cents"] == pytest.approx(0.125)
+
+
+def test_cloudflare_interstitial_and_private_hosts_are_skipped():
+    assert crawl._looks_blocked("Just a moment...") and crawl._looks_blocked("Attention Required! | Cloudflare")
+    rows = [{"source_url": u} for u in ("http://localhost:8765/x", "http://192.168.1.5/", "http://10.0.0.1/a",
+                                         "https://[::1]/", "http://printer.local/", "https://www.yellowpages.com/a")]
+    assert crawl.seed_urls(rows) == ["https://www.yellowpages.com/a"]

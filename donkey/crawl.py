@@ -12,11 +12,14 @@ from __future__ import annotations
 
 import csv
 import io
+import ipaddress
 import json
+import math
 import re
 import sqlite3
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -64,7 +67,8 @@ def clean_markdown(text: str) -> str:
 
 def _looks_blocked(markdown: str) -> bool:
     head = markdown[:3000].casefold()
-    return any(word in head for word in ("captcha", "are you a robot", "verify you are human", "access denied"))
+    return any(word in head for word in ("captcha", "are you a robot", "verify you are human", "access denied",
+                                           "just a moment", "attention required"))
 
 
 Fetch = Callable[[list[str]], list[dict[str, Any]]]
@@ -157,10 +161,12 @@ class MessagesClient:
                     stream.write(json.dumps({"at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                                              "method": "POST", "path": "/v1/messages", "status": status,
                                              "seconds": round(time.monotonic() - started, 2)}) + "\n")
+        # A refusal is still billed, so its usage comes back (flagged) for the cap. The model that served the call
+        # (a fallback may differ) sets the price.
+        usage = {**(message.get("usage") or {}), "model": message.get("model") or model}
         if message.get("stop_reason") == "refusal":
-            raise RuntimeError("the model declined this page")
+            return "", {**usage, "refused": True}
         text = "".join(block.get("text", "") for block in message.get("content", []) if block.get("type") == "text")
-        usage = message.get("usage") or {}
         return text, {**usage, "truncated": True} if message.get("stop_reason") == "max_tokens" else usage
 
 
@@ -185,7 +191,7 @@ def extract_rows(
     today: str,
 ) -> dict[str, Any]:
     """One call per fetched page, stopping before a call whose worst case would pass the cap (input estimated at
-    3 characters a token, output at MAX_OUTPUT)."""
+    2 characters a token, output at MAX_OUTPUT)."""
     rows: list[dict[str, str]] = []
     used = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
     spent, stopped, errors = 0.0, "", []
@@ -194,22 +200,24 @@ def extract_rows(
             continue
         prompt = EXTRACT_PROMPT.format(town=town, columns=",".join(columns), url=page["url"], today=today,
                                        page=page["markdown"])
-        if spent + _cost_cents(model, len(prompt) // 3, MAX_OUTPUT) > cap_cents:
+        if spent + _cost_cents(model, len(prompt) // 2, MAX_OUTPUT) > cap_cents:
             stopped = f"stopped at the ${cap_cents / 100:.2f} cap before {page['url']}"
             break
         try:
             text, usage = client.create(model, prompt)
-        except RuntimeError as exc:  # one bad page never stops the run
-            errors.append(f"{page['url']}: {exc}")
+        except (RuntimeError, OSError, ValueError) as exc:  # one bad page (HTTP error, timeout, bad JSON) never
+            errors.append(f"{page['url']}: {exc}")             # stops the run
             continue
         used["calls"] += 1
+        if usage.get("refused"):
+            errors.append(f"{page['url']}: the model declined this page")
         if usage.get("truncated"):
             errors.append(f"{page['url']}: reply hit {MAX_OUTPUT} tokens; some rows may be missing")
         input_tokens = int(usage.get("input_tokens") or 0) + int(usage.get("cache_creation_input_tokens") or 0) + \
             int(usage.get("cache_read_input_tokens") or 0)
         used["input_tokens"] += input_tokens
         used["output_tokens"] += int(usage.get("output_tokens") or 0)
-        spent += _cost_cents(model, input_tokens, int(usage.get("output_tokens") or 0))
+        spent += _cost_cents(usage.get("model") or model, input_tokens, int(usage.get("output_tokens") or 0))
         found = _parse_csv(text, columns)
         for row in found:
             row["source_url"], row["date_seen"] = page["url"], today
@@ -238,9 +246,21 @@ def seed_urls(rows: list[dict[str, str]]) -> list[str]:
     seen: dict[str, None] = {}
     for row in rows:
         url = row.get("source_url", "").strip()
-        if re.match(r"https?://", url):
+        if re.match(r"https?://", url) and _public_host(url):
             seen.setdefault(url, None)
     return list(seen)
+
+
+def _public_host(url: str) -> bool:
+    """False for localhost and private, loopback or link-local IP literals (a seed CSV never points at this PC)."""
+    host = (urllib.parse.urlsplit(url).hostname or "").casefold()
+    if not host or host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    return address.is_global
 
 
 def _key(row: dict[str, str]) -> str:
@@ -295,7 +315,7 @@ def run_ab(
     agent_rows = _read_rows(agent_csv, COLUMNS) if agent_csv else []
     if urls_file:
         urls = [line.strip() for line in Path(urls_file).read_text(encoding="utf8").splitlines()
-                if re.match(r"https?://", line.strip())]
+                if re.match(r"https?://", line.strip()) and _public_host(line.strip())]
     else:
         urls = seed_urls(agent_rows)
     if not urls:
@@ -320,7 +340,7 @@ def run_ab(
         spent = month_spend(con)
         budget = min(settings["crawl_cap_cents"], settings["monthly_cap_cents"] - spent)
         report.update(month_spent_cents=spent, budget_cents=budget)
-        worst = sum(_cost_cents(model, (len(p["markdown"]) + len(EXTRACT_PROMPT)) // 3, MAX_OUTPUT)
+        worst = sum(_cost_cents(model, (len(p["markdown"]) + len(EXTRACT_PROMPT)) // 2, MAX_OUTPUT)
                     for p in pages if not p["skipped"])
         report["worst_case_cents"] = round(worst, 2)
         if dry_run:
@@ -346,7 +366,7 @@ def run_ab(
                         (_now(), str(exc)[:500], run_id))
             con.commit()
             raise
-        cost = int(round(done["cost_cents"] + 0.49))  # whole cents, rounded up, for the month cap
+        cost = math.ceil(done["cost_cents"])  # whole cents, rounded up, for the month cap
         con.execute("UPDATE agent_runs SET finished_at = ?, status = 'done', cost_cents = ?, files = ?, rows = ?, "
                     "note = ? WHERE id = ?", (_now(), cost, done["usage"]["calls"], len(done["rows"]),
                                               done["stopped"][:500] or None, run_id))

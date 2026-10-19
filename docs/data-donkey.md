@@ -302,3 +302,5 @@ goes into snapshots, so the weekly diff and call-this-week are untouched; the we
 - Model: `DONKEY_CRAWL_MODEL` (default `claude-opus-5-5`, effort low; `claude-haiku-5-5` is about 40x cheaper per token).
 - Public pages only: robots.txt is honoured, a page that refuses (401/403/429, a CAPTCHA or bot challenge) is skipped
   and listed, never worked around. Two seconds between pages, one retry on a network error or 5xx.
+- Only public hosts are fetched (no localhost or private addresses). A page the model declines, times out on or
+  garbles is listed as an error and the run goes on; a declined call still counts toward the cap.
