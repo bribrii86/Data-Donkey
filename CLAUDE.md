@@ -5,7 +5,12 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-17)
+## Current state (2026-10-18)
+- v0.6.1: `crawl-ab` (Buck asked 2026-10-18 23:41 UTC). Optional Crawl4AI fetch layer (`donkey/crawl.py`, extra
+  `crawl`) for a one-town A/B against the agent's last run of that town: same pages, Crawl4AI Markdown + one Messages
+  call per page, report of cost/tokens/rows. Cap DONKEY_CRAWL_CAP_USD $2, model DONKEY_CRAWL_MODEL (default Opus 5.5).
+  Weekly job unchanged; no snapshots written. Cloud smoke test 2026-10-18: a Yellow Pages page went 295k HTML chars to
+  41k Markdown; maricopa-az.gov (403) and chamberofcommerce.com (Cloudflare) refused a datacenter IP and were skipped.
 - v0.6.0: who decides + board minutes (Buck 2026-10-17 17:54 UTC approved; research write-up in the project files
   research/decision_locality.md). Every call-this-week row carries `locality` (local, franchise, regional, corporate,
   central_procurement, unknown + evidence, confidence, owner_hint, initiative, source) and `board_note`. Free tier

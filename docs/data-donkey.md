@@ -283,3 +283,24 @@ copiers, print, document management, IT, phones, RFPs, co-op contracts and relat
 
 The monthly cap default is now $40 (Buck approved the two new jobs 2026-10-17). `growth-weekly --no-minutes` and
 `--no-locality` skip them.
+
+## Crawl4AI A/B for the town scrape (v0.6.1, paid, capped, manual only)
+
+`python -m donkey crawl-ab --town Maricopa` tests a second way to read a town: Crawl4AI (free, open source, a local
+headless browser) fetches the same directory pages the agent used last time for that town (the `source_url` values in
+`~/DataDonkey/runs/DAY-SLUG/SLUG.csv`), turns each into clean Markdown, and one Messages API call per page pulls the
+business rows out. It then compares with that agent run: Claude cost and tokens, businesses found by each, by both,
+and how many have a phone and street. Output: `~/DataDonkey/runs/DAY-ab-SLUG/crawl4ai.csv` and `report.json`. Nothing
+goes into snapshots, so the weekly diff and call-this-week are untouched; the weekly job does not change.
+
+- Install once: `pip install "data-donkey[crawl]"` then `crawl4ai-setup` (downloads its browser).
+- `--dry-run` fetches the pages (free) and shows page sizes and the worst-case Claude cost, with no Claude call.
+- `--urls FILE` uses your own page list (one URL per line) instead of the agent's pages.
+- `--agent-usage` also asks the Console for the agent session's own token counts.
+- Cap: `DONKEY_CRAWL_CAP_USD` (default $2) and the month cap; the run is one `agent_runs` row ("crawl4ai A/B: TOWN",
+  no session, so the town rotation ignores it). Before each page it stops if the worst case would pass the cap.
+- Model: `DONKEY_CRAWL_MODEL` (default `claude-opus-5-5`, effort low; `claude-haiku-5-5` is about 40x cheaper per token).
+- Public pages only: robots.txt is honoured, a page that refuses (401/403/429, a CAPTCHA or bot challenge) is skipped
+  and listed, never worked around. Two seconds between pages, one retry on a network error or 5xx.
+- Only public hosts are fetched (no localhost or private addresses). A page the model declines, times out on or
+  garbles is listed as an error and the run goes on; a declined call still counts toward the cap.

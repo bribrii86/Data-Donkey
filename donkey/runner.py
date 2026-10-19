@@ -279,6 +279,8 @@ def load_settings(env: dict[str, str] | None = None, home: Path | None = None) -
         notices_cap_cents=_cents(merged.get("DONKEY_NOTICES_CAP_USD", "1.50"), "DONKEY_NOTICES_CAP_USD"),
         locality_cap_cents=_cents(merged.get("DONKEY_LOCALITY_CAP_USD", "5"), "DONKEY_LOCALITY_CAP_USD"),
         minutes_cap_cents=_cents(merged.get("DONKEY_MINUTES_CAP_USD", "3"), "DONKEY_MINUTES_CAP_USD"),
+        crawl_cap_cents=_cents(merged.get("DONKEY_CRAWL_CAP_USD", "2"), "DONKEY_CRAWL_CAP_USD"),
+        crawl_model=merged.get("DONKEY_CRAWL_MODEL", ""),  # crawl-ab only; blank = crawl.DEFAULT_MODEL
         locality_max_rows=max(0, int(merged.get("DONKEY_LOCALITY_MAX_ROWS", "60"))),
         bodies_file=Path(merged.get("DONKEY_BODIES_FILE") or home / "bodies.csv"),
         area=merged.get("DONKEY_RUN_AREA", "stephanie"),
