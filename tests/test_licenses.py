@@ -2,8 +2,10 @@
 import csv
 from datetime import date
 
+import pytest
+
 from donkey import api
-from donkey.ingest import ingest
+from donkey.ingest import ingest, main
 
 TODAY = date(2026, 10, 19)
 COLUMNS = ["Business Name", "Legal Name", "Address", "City", "State", "ZIP", "License Number", "Issue Date",
@@ -34,8 +36,8 @@ def test_recent_licenses_score_and_renewals_and_old_ones_do_not(tmp_path):
     assert result["new"] == 4 and result["unmapped"] == ["naics", "vertical", "contact_name", "contact_title",
                                                          "contact_email", "contact_phone", "phone", "website"]
     hits = api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)
-    assert [(h["name"], h["score"], h["reasons"]) for h in hits] == [
-        ("Sample Test Dental", 3 + 1, ["new city business license", hits[0]["reasons"][1]])]  # +1 print-heavy (dental)
+    assert [(h["name"], h["score"], h["signals"]) for h in hits] == [("Sample Test Dental", 3 + 1, ["new_license", "print_heavy"])]
+    assert hits[0]["reasons"][0] == "new city business license"
     assert api.lookup("Faraway Test Shop", db_path=db)[0]["open_date"] == "2026-10-01"  # MM-DD-YYYY parsed
 
 
@@ -43,9 +45,33 @@ def test_license_list_without_issue_dates_is_refused(tmp_path):
     path = tmp_path / "lic.csv"
     with path.open("w", encoding="utf8", newline="") as stream:
         csv.writer(stream).writerows([["Business Name", "City"], ["Sample Test Dental", "Casa Grande"]])
-    try:
+    with pytest.raises(ValueError, match="event_date"):
         ingest("city-licenses", path, "test", tmp_path / "donkey.db")
-    except ValueError as exc:
-        assert "event_date" in str(exc)
-    else:
-        raise AssertionError("a license file with no issue date column must be refused")
+
+
+def test_window_edges_kiosks_and_one_signal_per_business(tmp_path):
+    db = tmp_path / "donkey.db"
+    rows = [
+        ["Edge Test Office", "", "1 Test St", "Casa Grande", "AZ", "85122", "BL-1", "2026-08-20", "Service"],  # day 60
+        ["Late Test Office", "", "2 Test St", "Casa Grande", "AZ", "85122", "BL-2", "2026-08-19", "Service"],  # day 61
+        ["Future Test Office", "", "3 Test St", "Casa Grande", "AZ", "85122", "BL-3", "2026-11-01", "Service"],
+        ["Coinme", "", "4 Test St", "Casa Grande", "AZ", "85122", "BL-4", "2026-10-01", "Retailer"],
+        ["Twice Test Cafe", "", "5 Test St", "Casa Grande", "AZ", "85122", "BL-5", "2026-10-01", "Restaurant"],
+        ["Twice Test Cafe", "", "5 Test St", "Casa Grande", "AZ", "85122", "BL-6", "2026-10-02", "Retailer"],
+        ["Blank Test Date", "", "6 Test St", "Casa Grande", "AZ", "85122", "BL-7", "", "Service"],
+        ["Town Only Test Shop", "", "7 Test St", "Coolidge", "AZ", "", "BL-8", "2026-10-03", "Service"],
+    ]
+    ingest("city-licenses", _licenses(tmp_path / "lic.csv", rows), "test", db)
+    hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)}
+    assert set(hits) == {"Edge Test Office", "Twice Test Cafe", "Town Only Test Shop"}
+    assert hits["Twice Test Cafe"]["signals"] == ["new_license"] and hits["Twice Test Cafe"]["score"] == 3
+
+
+def test_same_file_under_city_business_list_first_is_named(tmp_path, monkeypatch, capsys):
+    path = _licenses(tmp_path / "lic.csv", [["Sample Test Dental", "", "1 Test St", "Casa Grande", "AZ", "85122",
+                                             "BL-1", "2026-10-01", "Service"]])
+    monkeypatch.setenv("DONKEY_DB", str(tmp_path / "donkey.db"))
+    assert main(["ingest", "--source", "city-business-list", "--file", str(path), "--received-from", "t"]) == 0
+    capsys.readouterr()
+    assert main(["ingest", "--source", "city-licenses", "--file", str(path), "--received-from", "t"]) == 0
+    assert "Already ingested with --source city-business-list" in capsys.readouterr().out

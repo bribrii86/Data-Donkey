@@ -304,8 +304,10 @@ def _ingest_rows(
                          f"donkey/sources/{source_id}.json")
     con = connect(db_path)
     try:
-        if con.execute("SELECT 1 FROM batches WHERE sha256 = ?", (digest,)).fetchone():
-            return {"duplicate": True, "new": 0, "matched": 0, "needs_review": 0, "row_count": 0}
+        earlier = con.execute("SELECT source_id FROM batches WHERE sha256 = ?", (digest,)).fetchone()
+        if earlier:  # the same bytes under another map (city-business-list, then city-licenses) say which one
+            return {"duplicate": True, "new": 0, "matched": 0, "needs_review": 0, "row_count": 0,
+                    "earlier_source": earlier["source_id"] if earlier["source_id"] != source_id else ""}
 
         now = datetime.now(timezone.utc).isoformat()
         con.execute(
@@ -681,7 +683,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ingest failed: {exc}", file=sys.stderr)
         return 1
     if result["duplicate"]:
-        print("Already ingested; no changes made.")
+        print(f"Already ingested with --source {result['earlier_source']}; no changes made. The same file can't be "
+              "read again under another map." if result.get("earlier_source") else "Already ingested; no changes made.")
     else:
         print(f"new: {result['new']}; matched: {result['matched']}; needs-review: {result['needs_review']}"
               + (f"; left out by the map's filter: {result['skipped']}" if result.get("skipped") else ""))
