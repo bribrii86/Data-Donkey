@@ -91,3 +91,23 @@ def test_same_file_under_city_business_list_first_is_named(tmp_path, monkeypatch
 ])
 def test_home_based(legal, street, dba, home):
     assert looks_home_based(legal, street, dba) is home
+
+
+def test_rows_carry_address_phone_and_website(tmp_path):
+    """v0.6.6: the Monday list needs somewhere to call: the matched business's phone and site, else the license street."""
+    db = tmp_path / "donkey.db"
+    known = tmp_path / "list.csv"
+    with known.open("w", encoding="utf8", newline="") as stream:
+        csv.writer(stream).writerows([["Business Name", "Address", "City", "State", "ZIP", "Business Phone", "Website"],
+                                      ["Sample Test Salon", "40 W Test St", "Casa Grande", "AZ", "85122",
+                                       "520-555-0142", "https://www.sampletestsalon.example/book"]])
+    ingest("city-business-list", known, "test", db)
+    rows = [["Sample Test Salon", "", "40 W Test St", "Casa Grande", "AZ", "85122", "BL-1", "2026-10-01", "Service"],
+            ["New Test Cafe", "", "50 E Test Rd", "Casa Grande", "AZ", "85122", "BL-2", "2026-10-01", "Retailer"]]
+    ingest("city-licenses", _licenses(tmp_path / "lic.csv", rows), "test", db)
+    hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)}
+    salon, cafe = hits["Sample Test Salon"], hits["New Test Cafe"]
+    assert (salon["phone"], salon["website"]) == ("(520) 555-0142", "https://sampletestsalon.example")
+    assert salon["address"].startswith("40 W Test St") and "Casa Grande" in salon["address"]
+    assert cafe["address"].startswith("50 E Test Rd") and "85122" in cafe["address"]
+    assert (cafe["phone"], cafe["website"]) == ("", "")

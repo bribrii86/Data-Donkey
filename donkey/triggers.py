@@ -191,7 +191,7 @@ def _sba_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
             continue
         yield {"name": row["business_name"] or details.get("name", ""), "zip": zip_code, "town": row["town"] or "",
                "score": SCORES["sba_loan"], "signal": "sba_loan", "date": row["event_date"],
-               "amount": details.get("amount", ""), "lender": details.get("lender", "")}
+               "amount": details.get("amount", ""), "lender": details.get("lender", ""), "business_id": row["business_id"]}
 
 
 def looks_like_holding(name: str) -> bool:
@@ -256,7 +256,8 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
             continue
         yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_license"],
                "signal": "new_license", "date": row["event_date"], "license_number": details.get("license_number", ""),
-               "classification": details.get("classification", "")}
+               "classification": details.get("classification", ""), "business_id": row["business_id"],
+               "street": details.get("street", "")}
 
 
 def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
@@ -304,6 +305,7 @@ def call_this_week(
             notes = [h for h in board if _norm(h["name"]) == _norm(item["name"])]
             item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
                 notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
+        _contacts(con, ranked)
         categories, growing = _categories(con), _growing(con, today)
         for item in ranked:
             _boost(item, categories.get(_key(item["name"], item["zip"]), ""),
@@ -311,6 +313,33 @@ def call_this_week(
     finally:
         con.close()
     return sorted(ranked, key=lambda item: (-item["score"], item["name"]))
+
+
+def _contacts(con: sqlite3.Connection, ranked: list[dict]) -> None:
+    """v0.6.6: address, phone and website on each ranked business, from its businesses row (the one an event names,
+    else the same name + ZIP, a row with a phone first); a license's own street when the row has no address. A
+    business known only from a formation notice that gives the statutory agent's address gets none (not where it is)."""
+    has_keys = "phone_key" in {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}
+    for item in ranked:
+        item.update(address="", phone="", website="")
+        if set(item["signals"]) <= {"new_llc_agent"}:
+            continue
+        ids = [d["business_id"] for d in item["details"] if d.get("business_id")]
+        row = con.execute("SELECT * FROM businesses WHERE id = ?", (ids[0],)).fetchone() if ids else None
+        if row is None:
+            zip5 = re.sub(r"[^0-9]", "", item["zip"] or "")[:5]
+            same = [r for r in con.execute("SELECT * FROM businesses WHERE normalized_name = ? ORDER BY id",
+                                           (_norm(item["name"]),)) if not zip5 or r["zip"][:5] == zip5]
+            row = next((r for r in same if has_keys and r["phone_key"]), same[0] if same else None)
+        street = (row["address"] or row["street"]) if row else ""
+        street = street or next((d["street"] for d in item["details"] if d.get("signal") == "new_license" and d.get("street")), "")
+        if street and item["town"] and item["town"].casefold() not in street.casefold():
+            street = ", ".join(x for x in (street, f"{item['town'].title()}, AZ {item['zip']}".strip()) if x)
+        item["address"] = street
+        if row is not None and has_keys:
+            digits = row["phone_key"]
+            item["phone"] = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}" if len(digits) == 10 else ""
+            item["website"] = f"https://{row['domain_key']}" if row["domain_key"] else ""
 
 
 def looks_print_heavy(name: str, category: str = "") -> bool:
