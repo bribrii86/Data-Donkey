@@ -111,3 +111,52 @@ def test_rows_carry_address_phone_and_website(tmp_path):
     assert salon["address"].startswith("40 W Test St") and "Casa Grande" in salon["address"]
     assert cafe["address"].startswith("50 E Test Rd") and "85122" in cafe["address"]
     assert (cafe["phone"], cafe["website"]) == ("", "")
+
+
+def _item(name, zip_code, town, *details):
+    return {"name": name, "zip": zip_code, "town": town, "signals": [d["signal"] for d in details],
+            "details": list(details)}
+
+
+def test_contact_edge_cases(tmp_path):
+    import sqlite3
+
+    from donkey.triggers import _contacts
+
+    db = tmp_path / "donkey.db"
+    known = tmp_path / "list.csv"
+    with known.open("w", encoding="utf8", newline="") as stream:
+        csv.writer(stream).writerows([
+            ["Business Name", "Address", "City", "State", "ZIP", "Business Phone"],
+            ["Twin Test Cafe", "1 N Test St", "Casa Grande", "AZ", "85122", "520-555-0101"],
+            ["Zip Test Shop", "5 Test Ave, Casa Grande, AZ 85122", "", "AZ", "85122", "520-555-0103"],
+            ["Agent Test LLC", "7 Lawyer Way", "Casa Grande", "AZ", "85122", "520-555-0104"]])
+    ingest("city-business-list", known, "test", db)
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    con.execute("""INSERT INTO businesses (name, normalized_name, address, street, city, state, zip, created_at,
+        updated_at, phone_key) VALUES ('Twin Test Cafe', 'twin test cafe', '900 E Other Rd', '900 E Other Rd',
+        'Casa Grande', 'AZ', '85122', 'x', 'x', '5205550102')""")  # a needs-review twin: two places, one name
+    lic = {"signal": "new_license", "street": "900 E Other Rd"}
+    items = [_item("Twin Test Cafe", "85122", "casa grande", {"signal": "new_phone"}),  # two places: blank
+             _item("Twin Test Cafe", "85122", "casa grande", lic),  # the license street picks one
+             _item("Zip Test Shop", "85122", "casa grande", {"signal": "moved"}),
+             _item("Twin Test Cafe", "", "", {"signal": "new_phone"}),  # no ZIP or town: no guess
+             _item("Agent Test LLC", "85122", "casa grande", {"signal": "new_llc_agent"})]
+    _contacts(con, items)
+    assert (items[0]["address"], items[0]["phone"]) == ("", "")
+    assert items[1]["address"] == "900 E Other Rd, Casa Grande, AZ 85122" and items[1]["phone"] == "(520) 555-0102"
+    assert items[2]["address"] == "5 Test Ave, Casa Grande, AZ 85122"  # nothing appended twice
+    assert (items[3]["address"], items[4]["address"], items[4]["phone"]) == ("", "", "")
+    moved = _item("Twin Test Cafe", "85122", "casa grande", {**lic, "street": "77 New Test Blvd",
+                                                              "business_id": 1})
+    _contacts(con, [moved])  # a moved business: the license street, not the stored old one
+    assert moved["address"].startswith("77 New Test Blvd") and moved["phone"] == "(520) 555-0101"
+    for index in ("idx_businesses_phone", "idx_businesses_domain"):  # a pre-v0.6.4 database: addresses only
+        con.execute(f"DROP INDEX IF EXISTS {index}")  # nosec B608 - fixed names
+    con.execute("ALTER TABLE businesses DROP COLUMN phone_key")
+    con.execute("ALTER TABLE businesses DROP COLUMN domain_key")
+    old = _item("Zip Test Shop", "85122", "casa grande", {"signal": "moved"})
+    _contacts(con, [old])
+    assert old["address"].startswith("5 Test Ave") and old["phone"] == ""
+    con.close()
