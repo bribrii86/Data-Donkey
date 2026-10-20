@@ -191,7 +191,7 @@ def _sba_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: da
             continue
         yield {"name": row["business_name"] or details.get("name", ""), "zip": zip_code, "town": row["town"] or "",
                "score": SCORES["sba_loan"], "signal": "sba_loan", "date": row["event_date"],
-               "amount": details.get("amount", ""), "lender": details.get("lender", "")}
+               "amount": details.get("amount", ""), "lender": details.get("lender", ""), "business_id": row["business_id"]}
 
 
 def looks_like_holding(name: str) -> bool:
@@ -256,7 +256,8 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
             continue
         yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_license"],
                "signal": "new_license", "date": row["event_date"], "license_number": details.get("license_number", ""),
-               "classification": details.get("classification", "")}
+               "classification": details.get("classification", ""), "business_id": row["business_id"],
+               "street": details.get("street", "")}
 
 
 def _board_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
@@ -304,6 +305,7 @@ def call_this_week(
             notes = [h for h in board if _norm(h["name"]) == _norm(item["name"])]
             item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
                 notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
+        _contacts(con, ranked)
         categories, growing = _categories(con), _growing(con, today)
         for item in ranked:
             _boost(item, categories.get(_key(item["name"], item["zip"]), ""),
@@ -311,6 +313,57 @@ def call_this_week(
     finally:
         con.close()
     return sorted(ranked, key=lambda item: (-item["score"], item["name"]))
+
+
+def _contacts(con: sqlite3.Connection, ranked: list[dict]) -> None:
+    """v0.6.6: address, phone and website on each ranked business. Its businesses row is the one an event names, else
+    the only same-name row in its ZIP (in its town when there is no ZIP); several same-name rows are narrowed by the
+    license's street, and stay blank if that doesn't settle it (a chain's other store isn't this one). A license's own
+    street wins over the stored address (a moved business keeps its old one there). A business known only from a
+    formation notice that gives the statutory agent's address gets none. Never raises: blanks instead."""
+    for item in ranked:
+        item.update(address="", phone="", website="")
+    try:
+        has_keys = "phone_key" in {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}
+        for item in ranked:
+            if set(item["signals"]) <= {"new_llc_agent"}:
+                continue
+            _contact(con, item, has_keys)
+    except sqlite3.Error:
+        for item in ranked:
+            item.update(address="", phone="", website="")
+
+
+def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
+    license_street = next((d["street"] for d in item["details"] if d.get("signal") == "new_license" and d.get("street")), "")
+    ids = [d["business_id"] for d in item["details"] if d.get("business_id")]
+    row = con.execute("SELECT * FROM businesses WHERE id = ?", (ids[0],)).fetchone() if ids else None
+    if row is None:
+        zip5 = re.sub(r"[^0-9]", "", item["zip"] or "")[:5]
+        town = (item["town"] or "").strip().casefold()
+        same = [r for r in con.execute("SELECT * FROM businesses WHERE normalized_name = ? ORDER BY id",
+                                       (_norm(item["name"]),))
+                if (r["zip"][:5] == zip5 if zip5 else bool(town) and r["city"].strip().casefold() == town)]
+        if len(same) > 1 and license_street:
+            same = [r for r in same if _street_key(r["street"] or r["address"]) == _street_key(license_street)]
+        row = same[0] if len(same) == 1 else None
+    street = license_street or ((row["address"] or row["street"]) if row else "")
+    zip_code, town = item["zip"] or "", (item["town"] or "").strip()
+    folded = street.casefold()
+    if street and town and town.casefold() not in folded and not (zip_code and zip_code in street):
+        street = f"{street}, {town.title()}" + (f", AZ {zip_code}" if zip_code else "")
+    item["address"] = street
+    if row is not None and has_keys:
+        digits = row["phone_key"]
+        item["phone"] = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}" if len(digits) == 10 else ""
+        item["website"] = f"https://{row['domain_key']}" if row["domain_key"] else ""
+
+
+def _street_key(street: str) -> str:
+    """House number + first street word ("40 W Test St Ste 2" -> "40 test"), for telling same-name places apart."""
+    words = re.findall(r"[a-z0-9]+", (street or "").casefold())
+    words = [w for w in words if w not in {"n", "s", "e", "w", "north", "south", "east", "west"}]
+    return " ".join(words[:2])
 
 
 def looks_print_heavy(name: str, category: str = "") -> bool:
