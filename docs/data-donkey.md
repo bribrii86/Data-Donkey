@@ -154,7 +154,9 @@ equipment finance (3), bank or other (1), and a copier lease whose estimated end
 `score`, `signals` and plain-language `reasons`. Apps add their own triggers by passing scorer functions (for
 example a permit feed); hits for the same business name and ZIP are added together. Scores live in
 `donkey.triggers.SCORES`. Since v0.6.6 each row also has `address`, `phone` and `website` from its businesses row (a license's own
-street when that row has no address; none for a formation notice that only gives the statutory agent's address).
+street when that row has no address; none for a formation notice that only gives the statutory agent's address). Since v0.6.7 a phone, website or address still
+blank comes from the latest listings snapshot (Overture, town lists): a like name in the same ZIP at the same house number
+and street, or with no street known the one same-name place in that ZIP; two candidates leave it blank.
 
 The older SOS CSV (`az-sos-ucc`) has no city or ZIP. In an area run those filings are kept: when the debtor name
 contains one of the area's towns (not "TOWN County") that town is shown, otherwise the row says "location

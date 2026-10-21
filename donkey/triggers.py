@@ -325,10 +325,12 @@ def _contacts(con: sqlite3.Connection, ranked: list[dict]) -> None:
         item.update(address="", phone="", website="")
     try:
         has_keys = "phone_key" in {row["name"] for row in con.execute("PRAGMA table_info(businesses)")}
+        listed = _listed_by_zip(con)
         for item in ranked:
             if set(item["signals"]) <= {"new_llc_agent"}:
                 continue
             _contact(con, item, has_keys)
+            _from_listings(item, listed)
     except sqlite3.Error:
         for item in ranked:
             item.update(address="", phone="", website="")
@@ -357,6 +359,54 @@ def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
         digits = row["phone_key"]
         item["phone"] = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}" if len(digits) == 10 else ""
         item["website"] = f"https://{row['domain_key']}" if row["domain_key"] else ""
+
+
+def _listed_by_zip(con: sqlite3.Connection) -> dict[str, list[sqlite3.Row]]:
+    """Rows of the latest snapshot of each list (Overture, town lists) by 5-digit ZIP, for _from_listings."""
+    rows = con.execute(
+        """SELECT snapshot_rows.* FROM snapshot_rows JOIN (SELECT label, MAX(id) AS id FROM snapshots GROUP BY label)
+        latest ON latest.id = snapshot_rows.snapshot_id WHERE snapshot_rows.zip <> ''""")
+    out: dict[str, list[sqlite3.Row]] = {}
+    for row in rows:
+        out.setdefault(re.sub(r"[^0-9]", "", row["zip"])[:5], []).append(row)
+    return out
+
+
+def _from_listings(item: dict, listed: dict[str, list[sqlite3.Row]]) -> None:
+    """v0.6.7: a phone, website or address still blank comes from the weekly business listings (Overture snapshots):
+    the one place in the same ZIP with a like name ("Durham School Services LP" / "Durham School Services") at the
+    same house number and street; with no street known, the one same-name place in the ZIP. Two candidates: nothing
+    (a chain's other store isn't this one)."""
+    if item["phone"] and item["website"] and item["address"]:
+        return
+    zip5 = re.sub(r"[^0-9]", "", item["zip"] or "")[:5]
+    name = _norm(item["name"])
+    street = next((d["street"] for d in item["details"] if d.get("street")), "") or item["address"].split(",")[0]
+    words = set(name.split())
+    if not zip5 or not words:
+        return
+    if street:
+        key = _street_key(street)
+        here = [r for r in listed.get(zip5, []) if _street_key(r["street"]) == key]
+        same = [r for r in here if _norm(r["name"]) == name] or [r for r in here if _alike_words(words, _norm(r["name"]))]
+    else:
+        same = [r for r in listed.get(zip5, []) if _norm(r["name"]) == name]
+    if len({_street_key(r["street"]) for r in same}) != 1:
+        return
+    pick = next((r for r in same if r["phone"]), same[0])
+    digits = re.sub(r"[^0-9]", "", pick["phone"] or "")[-10:]
+    if not item["phone"] and len(digits) == 10:
+        item["phone"] = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    if not item["website"] and pick["website"]:
+        item["website"] = pick["website"]
+    if not item["address"] and pick["street"]:
+        town = (pick["city"] or item["town"] or "").strip().title()
+        item["address"] = ", ".join(x for x in (pick["street"], town, f"AZ {zip5}") if x)
+
+
+def _alike_words(words: set[str], other: str) -> bool:
+    theirs = set(other.split())
+    return bool(theirs) and (words <= theirs or theirs <= words or len(words & theirs) >= 2)
 
 
 def _street_key(street: str) -> str:
