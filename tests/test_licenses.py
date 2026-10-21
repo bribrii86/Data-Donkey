@@ -221,3 +221,45 @@ def test_listing_without_street_needs_one_place(tmp_path):
     con.close()
     assert (twin["phone"], twin["address"]) == ("", "")
     assert (solo["phone"], solo["address"]) == ("(520) 555-0183", "3 C St, Casa Grande, AZ 85122")
+
+
+def test_listings_never_borrow_a_neighbor(tmp_path):
+    """Review fixes: two tenants of one building, a street with no house number, toll-free and social links, and a
+    database whose listings can't be read."""
+    import sqlite3
+
+    from donkey import growth
+    from donkey.triggers import _contacts
+
+    db = tmp_path / "donkey.db"
+    snap = tmp_path / "snap.csv"
+    cols = ["name", "street", "city", "zip", "phone", "website", "category", "date_seen"]
+    places = [("Grande Test Dental", "1004 N Mall Pkwy Ste 1", "520-555-0191", ""),
+              ("Grande Test Vision", "1004 N Mall Pkwy Ste 2", "520-555-0192", ""),
+              ("Free Test Call Co", "7 E Test St", "800-555-0193", "https://www.facebook.com/freetest")]
+    with snap.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=cols)
+        writer.writeheader()
+        for name, street, phone, site in places:
+            writer.writerow({"name": name, "street": street, "city": "Casa Grande", "zip": "85122", "phone": phone,
+                             "website": site, "category": "", "date_seen": "2026-10-01"})
+    growth.take_snapshot(snap, "overture stephanie", db_path=db)
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+
+    def item(name, street):
+        return {"name": name, "zip": "85122", "town": "casa grande", "signals": ["new_license"],
+                "details": [{"signal": "new_license", "street": street}]}
+
+    tenant = item("Grande Test Optometry", "1004 N Mall Parkway")  # alike to both tenants: neither
+    exact = item("Grande Test Vision", "1004 N Mall Pkwy")  # an exact name settles it
+    numberless = item("Grande Test Dental", "N Mall Pkwy")
+    free = item("Free Test Call Co", "7 E Test St")
+    _contacts(con, [tenant, exact, numberless, free])
+    assert tenant["phone"] == "" and exact["phone"] == "(520) 555-0192" and numberless["phone"] == ""
+    assert (free["phone"], free["website"]) == ("", "")  # toll-free and a Facebook page aren't the business's own
+    con.execute("DROP TABLE snapshot_rows")
+    kept = item("Grande Test Vision", "1004 N Mall Pkwy")
+    _contacts(con, [kept])  # no listings: the license street still shows
+    assert kept["address"].startswith("1004 N Mall Pkwy") and kept["phone"] == ""
+    con.close()
