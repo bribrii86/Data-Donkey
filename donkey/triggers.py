@@ -18,6 +18,7 @@ from typing import Callable, Iterable
 from . import areas, locality, ucc
 from .common import database_path, parse_date
 from .common import norm as _norm
+from .ingest import domain_key, phone_key
 
 __all__ = ["SCORES", "Scorer", "call_this_week", "lease_calendar", "looks_home_based", "looks_print_heavy"]
 
@@ -332,6 +333,16 @@ def _contacts(con: sqlite3.Connection, ranked: list[dict]) -> None:
     except sqlite3.Error:
         for item in ranked:
             item.update(address="", phone="", website="")
+    blank = [item for item in ranked if not set(item["signals"]) <= {"new_llc_agent"}
+             and not (item["phone"] and item["website"] and item["address"])]
+    if not blank:
+        return
+    try:  # loaded once, only when needed; a database without listings keeps what _contact found
+        listed = _listed_by_zip(con)
+    except sqlite3.Error:
+        return
+    for item in blank:
+        _from_listings(item, listed)
 
 
 def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
@@ -344,7 +355,7 @@ def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
         same = [r for r in con.execute("SELECT * FROM businesses WHERE normalized_name = ? ORDER BY id",
                                        (_norm(item["name"]),))
                 if (r["zip"][:5] == zip5 if zip5 else bool(town) and r["city"].strip().casefold() == town)]
-        if len(same) > 1 and license_street:
+        if len(same) > 1 and _street_key(license_street):
             same = [r for r in same if _street_key(r["street"] or r["address"]) == _street_key(license_street)]
         row = same[0] if len(same) == 1 else None
     street = license_street or ((row["address"] or row["street"]) if row else "")
@@ -359,11 +370,75 @@ def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
         item["website"] = f"https://{row['domain_key']}" if row["domain_key"] else ""
 
 
+def _listed_by_zip(con: sqlite3.Connection) -> dict[str, list[dict]]:
+    """Places in the latest snapshot of each list (Overture, town lists) by 5-digit ZIP, with their name and street
+    keys and a phone and website cleaned like the businesses keys (no toll-free numbers, no social or site-builder
+    pages), for _from_listings."""
+    rows = con.execute(
+        """SELECT snapshot_rows.* FROM snapshot_rows JOIN (SELECT label, MAX(id) AS id FROM snapshots GROUP BY label)
+        latest ON latest.id = snapshot_rows.snapshot_id WHERE snapshot_rows.zip <> ''""")
+    out: dict[str, list[dict]] = {}
+    for row in rows:
+        digits, domain = phone_key(row["phone"] or ""), domain_key(row["website"] or "")
+        out.setdefault(re.sub(r"[^0-9]", "", row["zip"])[:5], []).append({
+            "name": _norm(row["name"]), "street_key": _street_key(row["street"]), "street": row["street"],
+            "city": row["city"], "phone": digits, "website": f"https://{domain}" if domain else ""})
+    return out
+
+
+def _from_listings(item: dict, listed: dict[str, list[dict]]) -> None:
+    """v0.6.7: a phone, website or address still blank comes from the weekly business listings (Overture snapshots).
+    With a street known: the places in the same ZIP at the same house number and street, an exact name first, else a
+    like name ("Durham School Services LP" / "Durham School Services"). With no street: the same-name places in the
+    ZIP. It fills only when that leaves one place (or every candidate has the same phone): a chain's other store or
+    another tenant of the building is never used."""
+    zip5 = re.sub(r"[^0-9]", "", item["zip"] or "")[:5]
+    name = _norm(item["name"])
+    words = set(name.split())
+    if not zip5 or not words:
+        return
+    street = next((d["street"] for d in item["details"] if d.get("street")), "") or item["address"].split(",")[0]
+    key = _street_key(street)
+    places = listed.get(zip5, [])
+    if key:
+        here = [p for p in places if p["street_key"] == key]
+        same = [p for p in here if p["name"] == name] or [p for p in here if _alike_words(words, p["name"])]
+    elif street:
+        return  # a street with no house number can't tell places apart
+    else:
+        same = [p for p in places if p["name"] == name]
+    if not same or (len(same) > 1 and len({p["phone"] for p in same}) > 1):
+        return
+    pick = next((p for p in same if p["phone"]), same[0])
+    if not item["phone"] and len(pick["phone"]) == 10:
+        digits = pick["phone"]
+        item["phone"] = f"({digits[:3]}) {digits[3:6]}-{digits[6:]}"
+    if not item["website"] and pick["website"]:
+        item["website"] = pick["website"]
+    if not item["address"] and pick["street"]:
+        town = (pick["city"] or item["town"] or "").strip().title()
+        item["address"] = ", ".join(x for x in (pick["street"], town, f"AZ {zip5}") if x)
+
+
+def _alike_words(words: set[str], other: str) -> bool:
+    theirs = set(other.split())
+    return bool(theirs) and (words <= theirs or theirs <= words or len(words & theirs) >= 2)
+
+
+_STREET_WORDS = {"street": "st", "avenue": "ave", "av": "ave", "road": "rd", "drive": "dr", "boulevard": "blvd",
+                 "lane": "ln", "court": "ct", "place": "pl", "highway": "hwy", "parkway": "pkwy", "trail": "trl",
+                 "circle": "cir", "way": "way"}
+_DIRECTIONS = {"n", "s", "e", "w", "north", "south", "east", "west", "ne", "nw", "se", "sw"}
+
+
 def _street_key(street: str) -> str:
-    """House number + first street word ("40 W Test St Ste 2" -> "40 test"), for telling same-name places apart."""
-    words = re.findall(r"[a-z0-9]+", (street or "").casefold())
-    words = [w for w in words if w not in {"n", "s", "e", "w", "north", "south", "east", "west"}]
-    return " ".join(words[:2])
+    """House number + street name + street type, without directions or the suite ("40 W Test St Ste 2" -> "40 test
+    st", "40 West Test Street" -> the same). No house number: "" (never a match)."""
+    street = re.split(r"\b(?:ste|suite|unit|bldg|building|apt|spc)\b|#", (street or "").casefold())[0]
+    words = [_STREET_WORDS.get(w, w) for w in re.findall(r"[a-z0-9]+", street) if w not in _DIRECTIONS]
+    if len(words) < 2 or not re.fullmatch(r"\d+[a-z]?", words[0]):  # "1st St" is a street name, not a number
+        return ""
+    return " ".join(words)
 
 
 def looks_print_heavy(name: str, category: str = "") -> bool:

@@ -5,7 +5,10 @@ Data Donkey stores all data Brian Parris (bribrii86) acquires: city business lis
 places, leads, research. Apps pull from it; the first is the Stephanie sales app (repo bribrii86/Sales-Pilot, working
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
-## Current state (2026-10-20)
+## Current state (2026-10-21)
+- v0.6.7 (Buck yes 2026-10-21 01:40 UTC; his 2026-10-20 list had addresses on all 30 license rows but no phones):
+  a blank phone/website/address comes from the latest listings snapshot (`triggers._from_listings`): like name, same
+  ZIP, same house number + street; with no street, the one same-name place in the ZIP; two candidates = blank.
 - v0.6.6 (Buck yes 2026-10-20 00:50 UTC, after his first Monday list with license rows had no address or phone):
   every call-this-week row carries `address`, `phone`, `website` (`triggers._contacts`: the event's business row, else
   same name + ZIP with a phone first; a license's own street when no address; none for agent-address notices).

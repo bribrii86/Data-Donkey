@@ -160,3 +160,106 @@ def test_contact_edge_cases(tmp_path):
     _contacts(con, [old])
     assert old["address"].startswith("5 Test Ave") and old["phone"] == ""
     con.close()
+
+
+def test_phone_from_weekly_listings(tmp_path):
+    """v0.6.7: a license row with no phone takes it from the latest listings snapshot: like name, same ZIP and street."""
+    from donkey import growth
+
+    db = tmp_path / "donkey.db"
+    snap = tmp_path / "snap.csv"
+    cols = ["name", "street", "city", "zip", "phone", "website", "category", "date_seen"]
+    with snap.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=cols)
+        writer.writeheader()
+        writer.writerows([
+            {"name": "Sample Test Buses", "street": "26 North Test Road", "city": "Casa Grande", "zip": "85122",
+             "phone": "+1 520-555-0150", "website": "https://buses.example", "category": "", "date_seen": "2026-10-01"},
+            {"name": "Chain Test Subs", "street": "10 W Test Hwy", "city": "Casa Grande", "zip": "85122",
+             "phone": "520-555-0160", "website": "", "category": "", "date_seen": "2026-10-01"},
+            {"name": "Chain Test Subs", "street": "99 E Far Rd", "city": "Casa Grande", "zip": "85122",
+             "phone": "520-555-0161", "website": "", "category": "", "date_seen": "2026-10-01"},
+            {"name": "Other Test Tenant", "street": "50 E Mall Rd", "city": "Casa Grande", "zip": "85122",
+             "phone": "520-555-0170", "website": "", "category": "", "date_seen": "2026-10-01"}])
+    growth.take_snapshot(snap, "overture stephanie", db_path=db)
+    rows = [["Sample Test Buses LP", "", "26 N Test Rd", "Casa Grande", "AZ", "85122", "BL-1", "2026-10-01", "Service"],
+            ["Chain Test Subs", "", "99 E Far Rd", "Casa Grande", "AZ", "85122", "BL-2", "2026-10-01", "Retailer"],
+            ["New Test Cafe", "", "50 E Mall Rd", "Casa Grande", "AZ", "85122", "BL-3", "2026-10-01", "Retailer"]]
+    ingest("city-licenses", _licenses(tmp_path / "lic.csv", rows), "test", db)
+    hits = {h["name"]: h for h in api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)}
+    buses = hits["Sample Test Buses LP"]
+    assert (buses["phone"], buses["website"]) == ("(520) 555-0150", "https://buses.example")
+    assert buses["address"] == "26 N Test Rd, Casa Grande, AZ 85122"  # the license street stays
+    assert hits["Chain Test Subs"]["phone"] == "(520) 555-0161"  # the store at the license's street, not the other
+    assert hits["New Test Cafe"]["phone"] == ""  # same address, different business
+
+
+def test_listing_without_street_needs_one_place(tmp_path):
+    import sqlite3
+
+    from donkey import growth
+    from donkey.triggers import _contacts
+
+    db = tmp_path / "donkey.db"
+    snap = tmp_path / "snap.csv"
+    cols = ["name", "street", "city", "zip", "phone", "website", "category", "date_seen"]
+    with snap.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=cols)
+        writer.writeheader()
+        for street, phone in (("1 A St", "520-555-0181"), ("2 B St", "520-555-0182")):
+            writer.writerow({"name": "Twin Test Clinic", "street": street, "city": "Casa Grande", "zip": "85122",
+                             "phone": phone, "website": "", "category": "", "date_seen": "2026-10-01"})
+        writer.writerow({"name": "Solo Test Shop", "street": "3 C St", "city": "Casa Grande", "zip": "85122",
+                         "phone": "520-555-0183", "website": "", "category": "", "date_seen": "2026-10-01"})
+    growth.take_snapshot(snap, "overture stephanie", db_path=db)
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+    twin = {"name": "Twin Test Clinic", "zip": "85122", "town": "casa grande", "signals": ["new_phone"],
+            "details": [{"signal": "new_phone"}]}
+    solo = {**twin, "name": "Solo Test Shop", "details": [{"signal": "new_phone"}]}
+    _contacts(con, [twin, solo])
+    con.close()
+    assert (twin["phone"], twin["address"]) == ("", "")
+    assert (solo["phone"], solo["address"]) == ("(520) 555-0183", "3 C St, Casa Grande, AZ 85122")
+
+
+def test_listings_never_borrow_a_neighbor(tmp_path):
+    """Review fixes: two tenants of one building, a street with no house number, toll-free and social links, and a
+    database whose listings can't be read."""
+    import sqlite3
+
+    from donkey import growth
+    from donkey.triggers import _contacts
+
+    db = tmp_path / "donkey.db"
+    snap = tmp_path / "snap.csv"
+    cols = ["name", "street", "city", "zip", "phone", "website", "category", "date_seen"]
+    places = [("Grande Test Dental", "1004 N Mall Pkwy Ste 1", "520-555-0191", ""),
+              ("Grande Test Vision", "1004 N Mall Pkwy Ste 2", "520-555-0192", ""),
+              ("Free Test Call Co", "7 E Test St", "800-555-0193", "https://www.facebook.com/freetest")]
+    with snap.open("w", encoding="utf8", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=cols)
+        writer.writeheader()
+        for name, street, phone, site in places:
+            writer.writerow({"name": name, "street": street, "city": "Casa Grande", "zip": "85122", "phone": phone,
+                             "website": site, "category": "", "date_seen": "2026-10-01"})
+    growth.take_snapshot(snap, "overture stephanie", db_path=db)
+    con = sqlite3.connect(db)
+    con.row_factory = sqlite3.Row
+
+    def item(name, street):
+        return {"name": name, "zip": "85122", "town": "casa grande", "signals": ["new_license"],
+                "details": [{"signal": "new_license", "street": street}]}
+
+    tenant = item("Grande Test Optometry", "1004 N Mall Parkway")  # alike to both tenants: neither
+    exact = item("Grande Test Vision", "1004 N Mall Pkwy")  # an exact name settles it
+    numberless = item("Grande Test Dental", "N Mall Pkwy")
+    free = item("Free Test Call Co", "7 E Test St")
+    _contacts(con, [tenant, exact, numberless, free])
+    assert tenant["phone"] == "" and exact["phone"] == "(520) 555-0192" and numberless["phone"] == ""
+    assert (free["phone"], free["website"]) == ("", "")  # toll-free and a Facebook page aren't the business's own
+    con.execute("DROP TABLE snapshot_rows")
+    kept = item("Grande Test Vision", "1004 N Mall Pkwy")
+    _contacts(con, [kept])  # no listings: the license street still shows
+    assert kept["address"].startswith("1004 N Mall Pkwy") and kept["phone"] == ""
+    con.close()
