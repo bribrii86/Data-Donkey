@@ -1,0 +1,36 @@
+{
+  "id": "public-leases",
+  "name": "Public-body copier leases from board minutes",
+  "description": "One row per public body (school district, city, college, fire district) per check: the copier lease or purchase its board approved, read from public agendas, minutes and packets (dealer, lessor, make, units, term, amounts, cooperative contract or RFP, approval date, next opening, source link). Written by the public-leases Console job or imported from a hand-built list. status: lease_found, lead, vendor_known, nothing_public, blocked.",
+  "format": "csv",
+  "required": ["body_name", "event_date"],
+  "columns": {
+    "name": ["body_name"],
+    "city": ["town"],
+    "zip": ["zip"],
+    "state": ["state"],
+    "county": ["county"],
+    "event_date": ["checked_date"],
+    "status": ["status"],
+    "dealer": ["dealer"],
+    "lessor": ["lessor"],
+    "make": ["make"],
+    "units": ["units"],
+    "term_months": ["term_months"],
+    "monthly_amount": ["monthly_amount"],
+    "annual_amount": ["annual_amount"],
+    "contract_vehicle": ["contract_vehicle"],
+    "approved_date": ["approved_date"],
+    "next_opening": ["next_opening"],
+    "source_url": ["source_url"],
+    "notes": ["notes"]
+  },
+  "event": {
+    "kind": "public_lease",
+    "date": "event_date",
+    "town": "city",
+    "details": ["name", "city", "zip", "state", "county", "status", "dealer", "lessor", "make", "units", "term_months",
+                "monthly_amount", "annual_amount", "contract_vehicle", "approved_date", "next_opening", "source_url",
+                "notes"]
+  }
+}

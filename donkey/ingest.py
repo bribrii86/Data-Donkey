@@ -529,7 +529,64 @@ def main(argv: list[str] | None = None) -> int:
     parcels = commands.add_parser("parcels-pull", help="free: store the area's non-residential Pinal parcels (building "
                                                        "owner, mailing address, year built, last sale)")
     parcels.add_argument("--area", default="stephanie", help="area from areas.json")
+    leases = commands.add_parser("public-leases", help="paid, capped: read each public body's minutes for its copier "
+                                 "lease (any county)")
+    leases.add_argument("--county", required=True, help="county name, e.g. Pinal")
+    leases.add_argument("--state", default="AZ", help="state (default AZ; UCC months are used in AZ only)")
+    leases.add_argument("--bodies", help="bodies CSV (default: DONKEY_BODIES_FILE, else ~/DataDonkey/bodies.csv)")
+    leases.add_argument("--dry-run", action="store_true", help="show bodies, batches, budget and prompts; no API calls")
+    limport = commands.add_parser("public-leases-import", help="free: store a hand-built public-body lease CSV")
+    limport.add_argument("--file", required=True, help="CSV with body name, dealer, lessor, next opening, ...")
+    limport.add_argument("--county", required=True, help="county name, e.g. Pinal")
+    limport.add_argument("--state", default="AZ")
+    limport.add_argument("--received-from", default="hand-built list")
+    lcal = commands.add_parser("public-lease-calendar", help="free: public-body copier leases by next opening")
+    lcal.add_argument("--county", help="county name (default: all)")
+    lcal.add_argument("--state", help="state (default: all)")
+    lcal.add_argument("--all", action="store_true", help="also list bodies with nothing public or blocked")
+    lcal.add_argument("--out", help="write OUT.csv and OUT.xlsx (e.g. Desktop\\pinal-leases)")
+    bprompt = commands.add_parser("bodies-prompt", help="free: print the research prompt that builds a county's bodies CSV")
+    bprompt.add_argument("--county", required=True, help="county name, e.g. Maricopa")
+    bprompt.add_argument("--state", default="AZ")
     args = parser.parse_args(argv)
+    if args.command in ("public-leases", "public-leases-import", "public-lease-calendar", "bodies-prompt"):
+        from . import public_leases, runner
+
+        try:
+            if args.command == "bodies-prompt":
+                print(public_leases.bodies_prompt(args.county, args.state))
+            elif args.command == "public-leases-import":
+                done = public_leases.import_file(args.file, args.county, args.state, args.received_from)
+                stored = done["ingest"] or {}
+                print(f"{done['rows']} bodies read; " + ("already stored" if stored.get("duplicate") else
+                      f"stored ({stored.get('new', 0)} new, {stored.get('matched', 0)} matched)"))
+            elif args.command == "public-lease-calendar":
+                rows = public_leases.calendar(args.county, args.state, include_empty=args.all)
+                for row in rows:
+                    deal = ", ".join(v for v in (row["dealer"], row["lessor"], row["make"]) if v)
+                    print(f"{row['next_opening'] or 'unknown':<12} {row['body_name']} [{row['status']}]"
+                          + (f": {deal}" if deal else ""))
+                print(f"{len(rows)} public bodies")
+                if args.out:
+                    for path in public_leases.write_calendar(rows, args.out):
+                        print(f"wrote {path}")
+            else:
+                result = public_leases.run(runner.load_settings(), args.county, args.state, args.bodies,
+                                           dry_run=args.dry_run)
+                print(f"public leases {result['county']}: {result['bodies']} bodies, {result['skipped_recent']} read "
+                      f"in the last year, {result['with_ucc_months']} with UCC months; status {result['status']}")
+                for done in result["sessions"]:
+                    print(f"  batch {done['batch']}: {done['bodies']} bodies, budget {done['budget_cents']} cents, "
+                          f"{done['status']}" + (f", {done.get('rows', 0)} rows, cost {done.get('cost_cents', 0)} "
+                                                  "cents" if done["status"] not in ("dry_run", "skipped_cap") else ""))
+                    if args.dry_run and done["batch"] == 1:
+                        print(done["prompt"])
+                if result.get("note"):
+                    print(result["note"])
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            print(f"{args.command} failed: {exc}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "parcels-pull":
         from . import parcels as parcel_layer
 

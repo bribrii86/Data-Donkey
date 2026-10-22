@@ -6,6 +6,13 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-22)
+- v0.6.9 (Buck "go" 2026-10-22 11:53 UTC, Fable market review's top pick): public-body copier lease calendar for any
+  county. `public-leases --county X --bodies FILE` (paid, capped: DONKEY_PUBLIC_LEASES_CAP_USD $25 per run, 15 bodies
+  per agent session, not in growth-weekly) reads each body's minutes for its copier lease into `public_lease` events
+  (source map `public-leases`; AZ bodies get their UCC filing months; bodies found in the last 365 days skipped).
+  `public-leases-import` stores a hand-built list (free); `public-lease-calendar --county X --out STEM` writes CSV +
+  XLSX by next opening; `bodies-prompt --county X` prints the research prompt that builds a county's bodies CSV.
+  No paid run yet; Pinal re-run estimate $15-25.
 - v0.6.8 (Buck yes 2026-10-22 00:20 UTC): building owners. `parcels-pull --area stephanie` (free, no key; also a
   free step in growth-weekly) stores non-residential parcels from the City of Maricopa ArcGIS layer TaxParcel_8_26
   (all Pinal, owner + mailing address, year built, last sale) in `parcels`. call-this-week rows get `property` and
