@@ -156,7 +156,9 @@ example a permit feed); hits for the same business name and ZIP are added togeth
 `donkey.triggers.SCORES`. Since v0.6.6 each row also has `address`, `phone` and `website` from its businesses row (a license's own
 street when that row has no address; none for a formation notice that only gives the statutory agent's address). Since v0.6.7 a phone, website or address still
 blank comes from the latest listings snapshot (Overture, town lists): a like name in the same ZIP at the same house number
-and street, or with no street known the one same-name place in that ZIP; two candidates leave it blank.
+and street, or with no street known the one same-name place in that ZIP; two candidates leave it blank. Since v0.6.8 rows also carry `property` and `property_note` (the
+building's owner from `parcels-pull`, the Pinal parcel layer); a business that owns its building from an out-of-state
+mailing address turns an unknown who-decides into corporate.
 
 The older SOS CSV (`az-sos-ucc`) has no city or ZIP. In an area run those filings are kept: when the debtor name
 contains one of the area's towns (not "TOWN County") that town is shown, otherwise the row says "location
