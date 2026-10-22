@@ -26,6 +26,8 @@ USES = ("Commercial", "Industrial", "Religious", "Government", "Utility", "All")
 FIELDS = ("PARCELID", "SITEADDRES", "OWNERNME1", "OWNERNME2", "PSTLADDRES", "PSTLCITY", "PSTLSTATE", "PSTLZIP5",
           "USEDSCRP", "CLASSDSCRP", "RESYRBLT", "SALEDATE", "SALEPRICE")
 PAGE = 2000  # the layer's maxRecordCount
+MAX_PAGES = 50  # 100,000 parcels; the whole stephanie area is about 4,000
+_STATES = {"ARIZONA": "AZ", "ARIZ": "AZ"}
 
 SCHEMA = """CREATE TABLE IF NOT EXISTS parcels (
     parcel_id TEXT NOT NULL,
@@ -76,40 +78,58 @@ def pull(area: str = "stephanie", db_path: str | Path | None = None,
     where = "(" + " OR ".join(f"SITEADDRES LIKE '%{z}'" for z in zips) + ") AND USEDSCRP IN (" + \
         ", ".join(f"'{u}'" for u in USES) + ")"
     url = os.environ.get("DONKEY_PARCELS_URL") or LAYER
-    rows, offset = [], 0
-    while True:
+    if not url.startswith("https://"):
+        raise ValueError("DONKEY_PARCELS_URL must be an https:// address")
+    rows, seen, offset = [], set(), 0
+    for _ in range(MAX_PAGES):
         page = fetch(url, {"where": where, "outFields": ",".join(FIELDS), "returnGeometry": "false",
                            "orderByFields": "FID", "resultOffset": str(offset), "resultRecordCount": str(PAGE),
                            "f": "json"})
         if page.get("error"):
             raise RuntimeError(f"parcel layer error: {page['error'].get('message', page['error'])}")
         features = [f["attributes"] for f in page.get("features", [])]
-        rows += features
-        if not page.get("exceededTransferLimit") and len(features) < PAGE:
-            break
+        new = [f for f in features if str(f.get("PARCELID") or "").strip() not in seen]
+        seen.update(str(f.get("PARCELID") or "").strip() for f in new)
+        rows += new
+        if not new or (not page.get("exceededTransferLimit") and len(features) < PAGE):
+            break  # last page, or the layer sent a page we already have
         offset += len(features)
-        if not features:
-            break
+    else:
+        raise RuntimeError(f"parcel layer sent more than {MAX_PAGES} pages; nothing replaced")
     now = datetime.now(timezone.utc).isoformat()
     cities = sorted({c.title() for c in area_def.get("cities", [])})
+    parsed = [p for p in (_row(r, area, cities, now) for r in rows) if p]
     con = sqlite3.connect(database_path(db_path))
     try:
         con.execute(SCHEMA)
         con.execute("CREATE INDEX IF NOT EXISTS idx_parcels_zip ON parcels(site_zip)")
+        (before,) = con.execute("SELECT COUNT(*) FROM parcels WHERE area = ?", (area,)).fetchone()
+        if not parsed or len(parsed) < before / 2:
+            raise RuntimeError(f"parcel pull got {len(parsed)} parcels (had {before}); kept the old ones")
         with con:
             con.execute("DELETE FROM parcels WHERE area = ?", (area,))
-            for r in rows:
-                street, city, zip_code = split_site(r.get("SITEADDRES") or "", cities)
-                owner = " ".join(x.strip() for x in (r.get("OWNERNME1") or "", r.get("OWNERNME2") or "") if x and x.strip())
-                year = int(r.get("RESYRBLT") or 0)
-                con.execute(
-                    """INSERT OR REPLACE INTO parcels (parcel_id, area, site_street, site_city, site_zip, owner,
-                    owner_city, owner_state, use, year_built, sale_date, sale_price, pulled_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (str(r.get("PARCELID") or "").strip(), area, street, city, zip_code, owner,
-                     (r.get("PSTLCITY") or "").strip(), (r.get("PSTLSTATE") or "").strip().upper(),
-                     (r.get("USEDSCRP") or "").strip(), year if 1800 < year < 2200 else 0,
-                     (r.get("SALEDATE") or "").strip()[:10], float(r.get("SALEPRICE") or 0), now))
+            con.executemany(
+                """INSERT OR REPLACE INTO parcels (parcel_id, area, site_street, site_city, site_zip, owner,
+                owner_city, owner_state, use, year_built, sale_date, sale_price, pulled_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", parsed)
     finally:
         con.close()
-    return {"area": area, "parcels": len(rows)}
+    return {"area": area, "parcels": len(parsed), "skipped": len(rows) - len(parsed)}
+
+
+def _row(r: dict[str, Any], area: str, cities: list[str], now: str) -> tuple | None:
+    """One layer record as a parcels row; None when it has no parcel ID or a number field can't be read."""
+    pid = str(r.get("PARCELID") or "").strip()
+    if not pid:
+        return None
+    try:
+        year = int(float(r.get("RESYRBLT") or 0))
+        price = float(r.get("SALEPRICE") or 0)
+    except (TypeError, ValueError):
+        return None
+    street, city, zip_code = split_site(str(r.get("SITEADDRES") or ""), cities)
+    owner = " ".join(str(x).strip() for x in (r.get("OWNERNME1"), r.get("OWNERNME2")) if x and str(x).strip())
+    state = re.sub(r"[^A-Z]", "", str(r.get("PSTLSTATE") or "").upper())
+    return (pid, area, street, city, zip_code, owner, str(r.get("PSTLCITY") or "").strip(), _STATES.get(state, state),
+            str(r.get("USEDSCRP") or "").strip(), year if 1800 < year < 2200 else 0,
+            str(r.get("SALEDATE") or "").strip()[:10], price, now)

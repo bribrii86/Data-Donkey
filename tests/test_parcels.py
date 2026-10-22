@@ -1,11 +1,13 @@
 """v0.6.8: building owners from the Pinal parcel layer (fake layer pages; made-up owners)."""
 import csv
+import sqlite3
 from datetime import date
 
 import pytest
 
 from donkey import api, parcels
 from donkey.ingest import ingest
+from donkey.triggers import _owns
 
 TODAY = date(2026, 10, 19)
 
@@ -47,8 +49,8 @@ def test_pull_pages_and_replaces(tmp_path):
     assert parcels.pull("stephanie", db, fetch=fetch)["parcels"] == 5
     assert [c["resultOffset"] for c in calls] == ["0", "2"] and "85122" in calls[0]["where"]
     assert "'Residential'" not in calls[0]["where"]
-    fetch, _ = _fake_pages([{"features": [{"attributes": PARCELS[0]}]}])
-    assert parcels.pull("stephanie", db, fetch=fetch)["parcels"] == 1  # replaced, not added
+    fetch, _ = _fake_pages([{"features": [{"attributes": p} for p in PARCELS[:3]]}])
+    assert parcels.pull("stephanie", db, fetch=fetch)["parcels"] == 3  # replaced, not added
     fetch, _ = _fake_pages([{"error": {"message": "bad query"}}])
     with pytest.raises(RuntimeError, match="bad query"):
         parcels.pull("stephanie", db, fetch=fetch)
@@ -80,3 +82,44 @@ def test_call_this_week_gets_the_building_owner(tmp_path):
     assert salon["property_note"].startswith("building owner: Landlord Test Llc (Dallas, TX)")
     assert cafe["property"]["owns_building"] and not cafe["property"]["out_of_state"]  # blank mailing state
     assert hits["Split Test Shop"]["property"] == {} and hits["Nowhere Test Co"]["property"] == {}
+
+
+def _count(db):
+    con = sqlite3.connect(db)
+    try:
+        return con.execute("SELECT COUNT(*) FROM parcels").fetchone()[0]
+    finally:
+        con.close()
+
+
+def test_pull_stops_on_a_repeated_page_and_skips_bad_rows(tmp_path):
+    db = tmp_path / "donkey.db"
+    full = {"features": [{"attributes": p} for p in PARCELS[:2]], "exceededTransferLimit": True}
+    bad = dict(_parcel("9", "9 W TEST ST CASA GRANDE, AZ 85122", "BAD YEAR LLC"), RESYRBLT="n/a")
+    odd = _parcel("8", "8 W TEST ST CASA GRANDE, AZ 85122", "ODD STATE LLC", "PHOENIX", "Arizona", "1999.0")
+    fetch, calls = _fake_pages([full, {"features": [{"attributes": p} for p in (*PARCELS[2:], bad, odd)],
+                                       "exceededTransferLimit": True}, full, full])
+    result = parcels.pull("stephanie", db, fetch=fetch)
+    assert result == {"area": "stephanie", "parcels": 6, "skipped": 1} and len(calls) == 3  # page 3 repeats: stop
+    con = sqlite3.connect(db)
+    assert con.execute("SELECT owner_state, year_built FROM parcels WHERE parcel_id = '8'").fetchone() == ("AZ", 1999)
+    con.close()
+
+
+def test_pull_keeps_old_parcels_when_the_new_pull_is_empty_or_short(tmp_path):
+    db = tmp_path / "donkey.db"
+    fetch, _ = _fake_pages([{"features": [{"attributes": p} for p in PARCELS]}])
+    parcels.pull("stephanie", db, fetch=fetch)
+    for page in ({"features": []}, {"features": [{"attributes": PARCELS[0]}]}):
+        fetch, _ = _fake_pages([page])
+        with pytest.raises(RuntimeError, match="kept the old ones"):
+            parcels.pull("stephanie", db, fetch=fetch)
+        assert _count(db) == 5
+
+
+def test_a_landlord_sharing_town_words_does_not_own_the_business():
+    assert not _owns("CASA GRANDE HOLDINGS LLC", "Casa Grande Dental")
+    assert not _owns("SMITH FAMILY TRUST", "Smith Dental")
+    assert not _owns("DENTAL PROPERTIES LLC", "Casa Grande Dental")  # one distinctive word is not enough
+    assert _owns("SAMPLE TEST BURGERS INC", "Sample Test Burgers")
+    assert _owns("COPPER MESA DENTAL PLLC", "Copper Mesa Dental")

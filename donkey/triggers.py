@@ -398,8 +398,7 @@ def _property(con: sqlite3.Connection, ranked: list[dict]) -> None:
         if len({r["owner"].casefold() for r in found}) != 1:
             continue  # no parcel, or a building split among owners: can't say whose
         row = max(found, key=lambda r: (r["sale_date"], r["year_built"]))
-        owner_words, name = set(_norm(row["owner"]).split()), _norm(item["name"])
-        owns = bool(owner_words) and _alike_words(owner_words, name)
+        owns = _owns(row["owner"], item["name"])
         state = row["owner_state"]
         out = bool(state) and state != "AZ"
         item["property"] = {"owner": row["owner"], "owner_city": row["owner_city"].title(), "owner_state": state,
@@ -466,6 +465,23 @@ def _from_listings(item: dict, listed: dict[str, list[dict]]) -> None:
     if not item["address"] and pick["street"]:
         town = (pick["city"] or item["town"] or "").strip().title()
         item["address"] = ", ".join(x for x in (pick["street"], town, f"AZ {zip5}") if x)
+
+
+_PLAIN_WORDS = {"az", "arizona", "arizonacity", "pinal", "maricopa", "casa", "grande", "city", "eloy", "coolidge",
+                "florence", "stanfield", "picacho", "toltec", "valley", "farms", "hidden", "ak", "chin", "desert",
+                "holdings", "holding", "properties", "property", "realty", "investments", "investment", "trust",
+                "family", "partners", "partnership", "capital", "management", "group", "enterprises", "ventures",
+                "company", "co", "the", "of", "and", "real", "estate", "land", "rentals"}
+
+
+def _owns(owner: str, name: str) -> bool:
+    """The parcel owner is the business itself: the same name, or the same distinctive words (two or more) once
+    town and landlord words are dropped. "Casa Grande Holdings" never owns "Casa Grande Dental"."""
+    owner, name = _norm(owner), _norm(name)
+    if owner and owner == name:
+        return True
+    theirs, ours = set(owner.split()) - _PLAIN_WORDS, set(name.split()) - _PLAIN_WORDS
+    return len(ours) >= 2 and theirs == ours
 
 
 def _alike_words(words: set[str], other: str) -> bool:

@@ -9,8 +9,10 @@ Docs: docs/data-donkey.md.
 - v0.6.8 (Buck yes 2026-10-22 00:20 UTC): building owners. `parcels-pull --area stephanie` (free, no key; also a
   free step in growth-weekly) stores non-residential parcels from the City of Maricopa ArcGIS layer TaxParcel_8_26
   (all Pinal, owner + mailing address, year built, last sale) in `parcels`. call-this-week rows get `property` and
-  `property_note` (one owner at the same ZIP + house number + street). Only owns-its-building (owner name like the
-  business) + mailing state not AZ turns an unknown who-decides into corporate; a landlord's address changes nothing.
+  `property_note` (one owner at the same ZIP + house number + street). Only owns-its-building (owner = the business name, or the
+  same 2+ words once town and landlord words like Holdings/Trust are dropped) + mailing state not AZ turns an unknown
+  who-decides into corporate; a landlord's address changes nothing. A pull that comes back empty or under half the
+  stored rows keeps the old parcels; paging stops at 50 pages or a repeated page; unreadable rows are skipped.
   Cloud test 2026-10-22: 3,643 parcels in her ZIPs; 13 of the 30 Casa Grande license rows matched an owner.
 - v0.6.7 (Buck yes 2026-10-21 01:40 UTC; his 2026-10-20 list had addresses on all 30 license rows but no phones):
   a blank phone/website/address comes from the latest listings snapshot (`triggers._from_listings`): like name, same
