@@ -6,6 +6,9 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-22)
+- v0.6.10: `public-leases-import` reads Buck's hand-built list headers (found, meeting_date, est_next_opening,
+  amount, ucc_filing). First import on his PC 2026-10-22 17:12 UTC (28 bodies) left every next opening blank; he
+  re-imports after this (the newest row per body wins).
 - v0.6.9 (Buck "go" 2026-10-22 11:53 UTC, Fable market review's top pick): public-body copier lease calendar for any
   county. `public-leases --county X --bodies FILE` (paid, capped: DONKEY_PUBLIC_LEASES_CAP_USD $25 per run, 15 bodies
   per agent session, not in growth-weekly) reads each body's minutes for its copier lease into `public_lease` events
