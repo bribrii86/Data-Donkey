@@ -398,9 +398,16 @@ python -m donkey public-lease-calendar --county Pinal --out Desktop\pinal-leases
 - In Arizona each body gets the months of its stored UCC filings (debtor name has the body's distinctive words and
   kind, and the same district number) so the agent reads the meetings just before them; elsewhere it searches minutes
   since 2019. It stops on a body once the lease is found.
-- A body with a lease, lead or vendor found in the last 365 days is skipped on the next run; nothing_public and
-  blocked bodies are read again.
+- A body with a lease, lead or vendor found in the last 365 days is skipped on the next run; a nothing_public or
+  blocked body is skipped for 90 days. Two rows for one body keep the better finding, and the calendar never lets a
+  newer empty re-read hide an older lease.
+- The $25 run cap counts against the monthly cap (DONKEY_MONTHLY_CAP_USD; the weekly jobs need about $15.50 a week),
+  so raise the month or lower the run cap before a big county.
+- Calendar CSV cells that start with = + - @ get a leading ' so Excel never runs them; only http(s) source links
+  are kept.
 - `public-lease-calendar` lists the latest finding per body, soonest next opening first (unknown last); `--all` adds
   nothing_public and blocked bodies.
 - `public-leases-import` takes loose headers (Body, Finding/Status, Dealer, Lender, Brand, Next opening, Source,
-  Angle/Notes, ...). Rows without a body name are skipped.
+  Angle/Notes, ...). Rows without a body name are skipped and counted. With no status column the status comes from
+  the row: dealer plus term or amount = lease_found, dealer/lessor/make alone = vendor_known (lead with a next
+  opening), else nothing_public.

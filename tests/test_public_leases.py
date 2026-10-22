@@ -44,6 +44,8 @@ def test_dry_run_shows_ucc_months_and_spends_nothing(tmp_path):
     assert client.calls == [] and result["bodies"] == 3 and result["with_ucc_months"] == 1
     prompt = result["sessions"][0]["prompt"]
     assert "2025-07 (U.S. Bank Equipment Finance)" in prompt and "Other Bank" not in prompt  # district number differs
+    toltec_line = next(line for line in prompt.splitlines() if line.startswith("Toltec"))
+    assert toltec_line.endswith(",")  # no filings named Toltec
     assert "Pinal County, AZ" in prompt
     city_line = next(line for line in prompt.splitlines() if line.startswith("City of Coolidge"))
     assert "U.S. Bank" not in city_line  # a city's row never gets its school district's filings
@@ -65,9 +67,52 @@ def test_run_stores_rows_then_calendar_and_skip(tmp_path):
 
     again = public_leases.run(_settings(tmp_path), "Pinal", client=FakeClient({}), dry_run=True, db_path=db,
                               sleep=lambda s: None)
-    assert again["skipped_recent"] == 2  # the city had nothing public, so it is read again
-    assert "City of Coolidge" in again["sessions"][0]["prompt"]
+    assert again["skipped_recent"] == 3 and again["status"] == "nothing_to_do"  # empty bodies wait RETRY_DAYS
+
+
+def test_empty_bodies_retry_after_90_days_and_leases_after_a_year(tmp_path, monkeypatch):
+    db = _setup(tmp_path)
+    public_leases.run(_settings(tmp_path), "Pinal", client=FakeClient({"p-01.csv": FOUND.encode()}), db_path=db,
+                      sleep=lambda s: None)
+    con = connect(db)
+    con.execute("UPDATE events SET event_date = '2020-01-01' WHERE kind = 'public_lease' AND details_json LIKE "
+                "'%nothing_public%'")
+    con.commit()
+    con.close()
+    again = public_leases.run(_settings(tmp_path), "Pinal", client=FakeClient({}), dry_run=True, db_path=db,
+                              sleep=lambda s: None)
+    assert again["skipped_recent"] == 2 and "City of Coolidge" in again["sessions"][0]["prompt"]
     assert "Toltec School District #22,school" not in again["sessions"][0]["prompt"]
+
+
+def test_better_finding_wins_across_pages_and_over_a_newer_empty_row(tmp_path):
+    db = _setup(tmp_path)
+    later = ("body_name,status,notes\nCoolidge Unified School District #21,blocked,Site down.\n"
+             "Toltec School District #22,not found,\n")
+    client = FakeClient({"public-leases-01.csv": FOUND.encode(), "public-leases-02.csv": later.encode()})
+    public_leases.run(_settings(tmp_path), "Pinal", client=client, db_path=db, sleep=lambda s: None)
+    assert {r["body_name"]: r["status"] for r in public_leases.calendar("Pinal", db_path=db)} == {
+        "Coolidge Unified School District #21": "lease_found", "Toltec School District #22": "lead"}
+    hand = tmp_path / "recheck.csv"
+    hand.write_text("Body,Status\nCoolidge Unified School District #21,Nothing found\n", encoding="utf8")
+    public_leases.import_file(hand, "Pinal", db_path=db, home=tmp_path, checked="2030-01-01")
+    rows = public_leases.calendar("Pinal", db_path=db)
+    assert next(r for r in rows if r["body_name"].startswith("Coolidge"))["dealer"] == "Imagine Technology"
+
+
+def test_import_without_status_column_and_formula_cells(tmp_path):
+    db = tmp_path / "donkey.db"
+    hand = tmp_path / "plain.csv"
+    hand.write_text("Body,Dealer,Term,Make,Next,Notes,Source\n"
+                    "Eloy City,Sharp Dealer,60,Sharp,2028-01,=HYPERLINK(\"http://x.test\"),javascript:alert(1)\n"
+                    "Picacho SD,,,,,,\n,Orphan Dealer,,,,,\n", encoding="utf8")
+    done = public_leases.import_file(hand, "Pinal", db_path=db, home=tmp_path)
+    assert done["rows"] == 2 and done["skipped_no_name"] == 1
+    rows = public_leases.calendar(db_path=db, include_empty=True)
+    assert {r["body_name"]: r["status"] for r in rows} == {"Eloy City": "lease_found", "Picacho SD": "nothing_public"}
+    assert rows[0]["source_url"] == ""  # only http(s) links are kept
+    csv_path, _ = public_leases.write_calendar(rows, tmp_path / "cal")
+    assert "'=HYPERLINK" in csv_path.read_text(encoding="utf8")
 
 
 def test_batches_split_the_cap(tmp_path, monkeypatch):
@@ -109,8 +154,9 @@ def test_status_words_and_opening_order():
     assert public_leases.status("Strong lead") == "lead"
     assert public_leases.status("Blocked (site gone)") == "blocked"
     assert public_leases.status("") == ""
-    keys = sorted(["", "about fall 2027", "2027-03", "2026-11-11"], key=public_leases._opening)
-    assert keys == ["2026-11-11", "2027-03", "about fall 2027", ""]
+    assert public_leases.status("not found") == public_leases.status("No lease found") == "nothing_public"
+    keys = sorted(["", "about fall 2027", "2027-03", "2026-11-11", "March 2027", "2027-12"], key=public_leases._opening)
+    assert keys == ["2026-11-11", "2027-03", "March 2027", "2027-12", "about fall 2027", ""]
 
 
 def test_cli_bodies_prompt_and_calendar(tmp_path, monkeypatch, capsys):

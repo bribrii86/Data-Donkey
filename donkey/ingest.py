@@ -558,7 +558,8 @@ def main(argv: list[str] | None = None) -> int:
             elif args.command == "public-leases-import":
                 done = public_leases.import_file(args.file, args.county, args.state, args.received_from)
                 stored = done["ingest"] or {}
-                print(f"{done['rows']} bodies read; " + ("already stored" if stored.get("duplicate") else
+                print(f"{done['rows']} bodies read ({done['skipped_no_name']} rows with no body name skipped); "
+                      + ("already stored" if stored.get("duplicate") else
                       f"stored ({stored.get('new', 0)} new, {stored.get('matched', 0)} matched)"))
             elif args.command == "public-lease-calendar":
                 rows = public_leases.calendar(args.county, args.state, include_empty=args.all)

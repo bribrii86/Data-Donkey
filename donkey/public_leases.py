@@ -35,12 +35,17 @@ STORED = ("body_name", "county", "state", "town", "zip", "checked_date", *AGENT_
 STATUSES = ("lease_found", "lead", "vendor_known", "nothing_public", "blocked")
 FOUND = {"lease_found", "lead", "vendor_known"}  # a body with one of these is not read again for SKIP_DAYS
 SKIP_DAYS = 365
+RETRY_DAYS = 90  # nothing_public or blocked: read again after this many days
 BATCH = 15  # bodies per agent session, so one session never runs past the timeout
 SINCE_YEAR = 2019
 CALENDAR_COLUMNS = ("next_opening", "body_name", "county", "state", "town", "zip", "status", "dealer", "lessor",
                     "make", "units", "term_months", "monthly_amount", "annual_amount", "contract_vehicle",
                     "approved_date", "source_url", "notes", "checked_date")
-_LIMITS = {"notes": 400, "source_url": 500, "dealer": 120, "lessor": 120, "make": 120, "contract_vehicle": 160}
+_LIMITS = {"notes": 400, "source_url": 500, "dealer": 120, "lessor": 120, "make": 120, "contract_vehicle": 160,
+           "next_opening": 40, "approved_date": 40, "zip": 10, "town": 60}
+_RANK = {"lease_found": 3, "lead": 2, "vendor_known": 1}
+_MONTHS = {m: n for n, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov",
+                                       "dec"), 1)}
 # Words every school district or city shares; the rest of the name has to match a UCC debtor.
 _EXPAND = {"usd": "unified school district", "esd": "elementary school district", "sd": "school district",
            "uhsd": "union high school district", "cc": "community college"}
@@ -111,18 +116,31 @@ def bodies_prompt(county: str, state: str = "AZ") -> str:
 def status(value: str) -> str:
     """The agent's or a hand-built file's status in one of STATUSES ('' when it can't tell)."""
     text = (value or "").strip().casefold()
-    if text in STATUSES:
-        return text
-    for words, name in (("full|lease found|found", "lease_found"), ("lead", "lead"),
-                        ("vendor|incumbent|current", "vendor_known"), ("block|refus|gone", "blocked"),
-                        ("nothing|none|no copier|not found", "nothing_public")):
+    if text.replace(" ", "_") in STATUSES:
+        return text.replace(" ", "_")
+    # negatives first: "not found" and "no lease found" are nothing_public, never lease_found
+    for words, name in ((r"\b(block\w*|refus\w*|gone|captcha|403)\b", "blocked"),
+                        (r"\b(nothing|none|no|not|never)\b", "nothing_public"),
+                        (r"\b(full|lease found|found)\b", "lease_found"), (r"\blead\b", "lead"),
+                        (r"\b(vendor|incumbent|current)\b", "vendor_known")):
         if re.search(words, text):
             return name
     return ""
 
 
+def _infer(row: dict[str, str]) -> str:
+    """Status for a hand-built row with none: a dealer plus term or amount is a lease, a dealer alone a vendor."""
+    if row.get("dealer") and (row.get("term_months") or row.get("monthly_amount") or row.get("annual_amount")):
+        return "lease_found"
+    if row.get("dealer") or row.get("lessor") or row.get("make"):
+        return "vendor_known" if not row.get("next_opening") else "lead"
+    return "lead" if row.get("next_opening") or row.get("contract_vehicle") else "nothing_public"
+
+
 def _clean(row: dict[str, str]) -> dict[str, str]:
     row["status"] = status(row.get("status", ""))
+    if not re.match(r"https?://", row.get("source_url") or "", re.I):
+        row["source_url"] = ""
     for field, limit in _LIMITS.items():
         row[field] = (row.get(field) or "")[:limit]
     for field in ("approved_date", "checked_date"):
@@ -155,21 +173,26 @@ def _ucc_hints(con: sqlite3.Connection, bodies: list[dict[str, str]]) -> dict[st
         if not key:
             continue
         need = key | (words & _TYPES)
+        # numbers must agree: "Casa Grande Elementary" never takes "Casa Grande Union High No 82" filings
         found = sorted({f"{month} ({party})" for debtor, month, party in filings if month and need <= debtor
-                        and (not numbers or not {w for w in debtor if w.isdigit()} or numbers & debtor)})
+                        and numbers == {w for w in debtor if w.isdigit()}})
         if found:
             hints[body["body_name"]] = found
     return hints
 
 
 def _recent(con: sqlite3.Connection, county: str, today: date) -> set[str]:
-    """Bodies in this county with a lease or vendor found in the last SKIP_DAYS days."""
-    cutoff = (today - timedelta(days=SKIP_DAYS)).isoformat()
+    """Bodies in this county with a lease or vendor found in the last SKIP_DAYS days, or read with nothing found in
+    the last RETRY_DAYS days (so a run never pays twice for the same empty body)."""
+    found_cutoff = (today - timedelta(days=SKIP_DAYS)).isoformat()
+    retry_cutoff = (today - timedelta(days=RETRY_DAYS)).isoformat()
     done = set()
     for row in con.execute("SELECT event_date, details_json FROM events WHERE kind = 'public_lease'"):
         details = json.loads(row["details_json"])
-        if (details.get("county", "").casefold() == county.casefold() and status(details.get("status", "")) in FOUND
-                and (row["event_date"] or "") >= cutoff):
+        if details.get("county", "").casefold() != county.casefold():
+            continue
+        cutoff = found_cutoff if status(details.get("status", "")) in FOUND else retry_cutoff
+        if (row["event_date"] or "") >= cutoff:
             done.add(_norm(details.get("name", "")))
     return done
 
@@ -235,7 +258,9 @@ def run(
                     row = _clean({column: lower.get(column, "") for column in AGENT_COLUMNS})
                     row.update(body_name=body["body_name"], county=county, state=state.upper(), checked_date=day,
                                **_place(body["zip_or_area"]))
-                    rows[key] = row  # a later page's row for the same body wins
+                    # the same body on two pages: keep the better finding (a lease over nothing found)
+                    if key not in rows or _RANK.get(row["status"], 0) >= _RANK.get(rows[key]["status"], 0):
+                        rows[key] = row
             out = settings["home"] / "runs" / f"{day}-public-leases-{number:02d}" / "public-leases.csv"
             stored = _store(list(rows.values()), out, f"Console agent: public leases {county}", db_path)
             return {"rows": len(rows), "dropped": dropped, "csv": str(out), "ingest": stored}
@@ -285,27 +310,37 @@ def import_file(path: str | Path, county: str, state: str = "AZ", received_from:
                "source_url": ("source_url", "source", "url", "link"), "notes": ("notes", "note", "angle", "summary"),
                "zip": ("zip", "zip_or_area"), "town": ("town", "city")}
     day = checked or datetime.now(timezone.utc).date().isoformat()
-    rows = []
+    rows, unnamed = [], 0
     source = Path(path)
     for raw in csv.DictReader(io.StringIO(source.read_bytes().decode("utf-8-sig", "replace"))):
         lower = _lower(raw)
         row = {field: next((lower[name] for name in names if lower.get(name)), "") for field, names in aliases.items()}
         if not row["body_name"]:
+            unnamed += 1
             continue
         place = _place(row["zip"]) if row["zip"] else {"zip": "", "town": row["town"]}
         row = _clean({**row, **place, "county": county, "state": state.upper(), "checked_date": day})
+        row["status"] = row["status"] or _infer(row)
         rows.append({column: row.get(column, "") for column in STORED})
     if not rows:
         raise ValueError(f"{source}: no rows with a body name")
     out = Path(home or runner.HOME) / "runs" / f"{day}-public-leases-import" / f"{source.stem}.csv"
     stored = _store(rows, out, received_from, db_path)
-    return {"rows": len(rows), "csv": str(out), "ingest": stored}
+    return {"rows": len(rows), "skipped_no_name": unnamed, "csv": str(out), "ingest": stored}
 
 
 def _opening(value: str) -> str:
-    """'2027-03', 'about fall 2027', '2027-28' -> a sort key ('9999' when unknown)."""
-    found = re.search(r"(20\d\d)(?:-(0[1-9]|1[0-2])\b)?", value or "")
-    return f"{found.group(1)}-{found.group(2) or '13'}" if found else "9999"
+    """'2027-03', 'March 2027', 'about fall 2027', '2027-28' -> a sort key ('9999' when unknown; a year with no
+    month sorts after that year's months)."""
+    text = (value or "").casefold()
+    found = re.search(r"(20\d\d)(?:-(0[1-9]|1[0-2])(?!\d))?", text)
+    if not found:
+        return "9999"
+    month = found.group(2)
+    if not month:
+        named = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", text)
+        month = f"{_MONTHS[named.group(1)]:02d}" if named else "13"
+    return f"{found.group(1)}-{month}"
 
 
 def calendar(county: str | None = None, state: str | None = None, db_path: str | Path | None = None,
@@ -316,7 +351,8 @@ def calendar(county: str | None = None, state: str | None = None, db_path: str |
     con = sqlite3.connect(f"{database_path(db_path).as_uri()}?mode=ro", uri=True)
     con.row_factory = sqlite3.Row
     try:
-        latest: dict[tuple[str, str], tuple[str, int, dict]] = {}
+        # per body: the newest lease/lead/vendor finding, else the newest row (a later empty re-read never hides a lease)
+        latest: dict[tuple[str, str], tuple[bool, str, int, dict]] = {}
         for row in con.execute("SELECT id, event_date, details_json FROM events WHERE kind = 'public_lease'"):
             details = json.loads(row["details_json"])
             if county and details.get("county", "").casefold() != county.casefold():
@@ -324,14 +360,15 @@ def calendar(county: str | None = None, state: str | None = None, db_path: str |
             if state and details.get("state", "").casefold() != state.casefold():
                 continue
             key = (_norm(details.get("name", "")), details.get("county", "").casefold())
-            if key not in latest or (row["event_date"], row["id"]) > latest[key][:2]:
-                latest[key] = (row["event_date"] or "", row["id"], details)
+            rank = (status(details.get("status", "")) in FOUND, row["event_date"] or "", row["id"])
+            if key not in latest or rank > latest[key][:3]:
+                latest[key] = (*rank, details)
     except sqlite3.OperationalError as exc:  # a donkey.db from before any events table
         raise ValueError(f"no Data Donkey database at {database_path(db_path)}: {exc}") from None
     finally:
         con.close()
     rows = []
-    for checked_date, _, details in latest.values():
+    for _, checked_date, _, details in latest.values():
         row = {column: str(details.get(column, "")) for column in CALENDAR_COLUMNS}
         row.update(body_name=details.get("name", ""), town=details.get("city", "") or details.get("town", ""),
                    checked_date=checked_date, status=status(details.get("status", "")) or details.get("status", ""))
@@ -345,13 +382,15 @@ def write_calendar(rows: list[dict[str, str]], stem: str | Path) -> tuple[Path, 
     stem = Path(stem)
     stem.parent.mkdir(parents=True, exist_ok=True)
     csv_path, xlsx_path = stem.with_suffix(".csv"), stem.with_suffix(".xlsx")
-    runner._write_csv(rows, csv_path, CALENDAR_COLUMNS)
+    # agent-written text: a cell starting with = + - @ would run as a formula in Excel
+    runner._write_csv([{k: ("'" + v if v[:1] in "=+-@" else v) for k, v in row.items()} for row in rows], csv_path,
+                      CALENDAR_COLUMNS)
     xlsx_path.write_bytes(to_xlsx(rows, CALENDAR_COLUMNS, "Public leases"))
     return csv_path, xlsx_path
 
 
 def _cell(ref: str, value: str) -> str:
-    text = "".join(ch for ch in str(value) if ch in "\t\n\r" or ord(ch) >= 32)  # XML 1.0 has no control characters
+    text = "".join(ch for ch in str(value) if ch in "\t\n\r" or 32 <= ord(ch) < 0xFFFE)  # characters XML 1.0 allows
     return f'<c r="{ref}" t="inlineStr"><is><t xml:space="preserve">{html.escape(text, quote=False)}</t></is></c>'
 
 
