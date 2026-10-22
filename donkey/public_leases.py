@@ -118,7 +118,9 @@ def status(value: str) -> str:
     text = (value or "").strip().casefold()
     if text.replace(" ", "_") in STATUSES:
         return text.replace(" ", "_")
-    # negatives first: "not found" and "no lease found" are nothing_public, never lease_found
+    if re.search(r"(?<!no )\blease found\b", text):  # "Lease found (no term)"
+        return "lease_found"
+    # negatives next: "not found" and "no lease found" are nothing_public, never lease_found
     for words, name in ((r"\b(block\w*|refus\w*|gone|captcha|403)\b", "blocked"),
                         (r"\b(nothing|none|no|not|never)\b", "nothing_public"),
                         (r"\b(full|lease found|found)\b", "lease_found"), (r"\blead\b", "lead"),
@@ -338,7 +340,7 @@ def _opening(value: str) -> str:
         return "9999"
     month = found.group(2)
     if not month:
-        named = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b", text)
+        named = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|t|tember|ober|ember)?\b", text)
         month = f"{_MONTHS[named.group(1)]:02d}" if named else "13"
     return f"{found.group(1)}-{month}"
 
@@ -383,7 +385,7 @@ def write_calendar(rows: list[dict[str, str]], stem: str | Path) -> tuple[Path, 
     stem.parent.mkdir(parents=True, exist_ok=True)
     csv_path, xlsx_path = stem.with_suffix(".csv"), stem.with_suffix(".xlsx")
     # agent-written text: a cell starting with = + - @ would run as a formula in Excel
-    runner._write_csv([{k: ("'" + v if v[:1] in "=+-@" else v) for k, v in row.items()} for row in rows], csv_path,
+    runner._write_csv([{k: ("'" + v if v and v[0] in "=+-@" else v) for k, v in row.items()} for row in rows], csv_path,
                       CALENDAR_COLUMNS)
     xlsx_path.write_bytes(to_xlsx(rows, CALENDAR_COLUMNS, "Public leases"))
     return csv_path, xlsx_path

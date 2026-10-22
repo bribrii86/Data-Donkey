@@ -112,7 +112,8 @@ def test_import_without_status_column_and_formula_cells(tmp_path):
     assert {r["body_name"]: r["status"] for r in rows} == {"Eloy City": "lease_found", "Picacho SD": "nothing_public"}
     assert rows[0]["source_url"] == ""  # only http(s) links are kept
     csv_path, _ = public_leases.write_calendar(rows, tmp_path / "cal")
-    assert "'=HYPERLINK" in csv_path.read_text(encoding="utf8")
+    text = csv_path.read_text(encoding="utf8")
+    assert "'=HYPERLINK" in text and ",'," not in text and ",'\n" not in text  # blank cells stay blank
 
 
 def test_batches_split_the_cap(tmp_path, monkeypatch):
@@ -155,6 +156,9 @@ def test_status_words_and_opening_order():
     assert public_leases.status("Blocked (site gone)") == "blocked"
     assert public_leases.status("") == ""
     assert public_leases.status("not found") == public_leases.status("No lease found") == "nothing_public"
+    assert public_leases.status("Lease found (no term)") == "lease_found"
+    assert public_leases._opening("maybe 2027") == public_leases._opening("decision 2027") == "2027-13"
+    assert public_leases._opening("September 2027") == public_leases._opening("Sept 2027") == "2027-09"
     keys = sorted(["", "about fall 2027", "2027-03", "2026-11-11", "March 2027", "2027-12"], key=public_leases._opening)
     assert keys == ["2026-11-11", "2027-03", "March 2027", "2027-12", "about fall 2027", ""]
 
