@@ -9,7 +9,7 @@ Docs: docs/data-donkey.md.
 - v0.6.12 (Buck "go on both" 2026-10-22 23:02 UTC): a new_license doesn't score when the same business
   held a license more than 60 days earlier (same row, or same trade name + ZIP; an owner's second business still scores). Casa Grande sent its 2025 list (reply to the
   #26-330 follow-up; project files data/casa_grande/casa_grande_licenses_2025.csv, 1,229 rows, 1,203 phones): loading
-  it under city-licenses fills phones on ~1,016 of the 2026 businesses and drops 20 of the 55 Aug-Oct 2026 licenses
+  it under city-licenses fills phones on ~1,016 of the 2026 businesses and drops 18 of the 55 Aug-Oct 2026 licenses
   that were existing businesses.
 - v0.6.11: public-lease-calendar sorts free-text openings by the earliest year from this year on ("no council item
   since 2013" = unknown, "~Sep 2030" = 2030-09). Buck's re-import 2026-10-22 17:18 UTC brought the dates in; the old
