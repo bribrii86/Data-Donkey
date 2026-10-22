@@ -341,18 +341,23 @@ def import_file(path: str | Path, county: str, state: str = "AZ", received_from:
     return {"rows": len(rows), "skipped_no_name": unnamed, "csv": str(out), "ingest": stored}
 
 
-def _opening(value: str) -> str:
-    """'2027-03', 'March 2027', 'about fall 2027', '2027-28' -> a sort key ('9999' when unknown; a year with no
-    month sorts after that year's months)."""
+def _opening(value: str, this_year: int | None = None) -> str:
+    """Sort key for a free-text next opening: the earliest year from this year on, with its month when one is
+    given ('2027-03', 'Sep 2030', 'March 2027'); a year with no month sorts after that year's months. Past years are
+    history ('no council item since 2013', 'renewed fall 2024'), so text with only past years is unknown ('9999')."""
+    this_year = this_year or date.today().year
     text = (value or "").casefold()
-    found = re.search(r"(20\d\d)(?:-(0[1-9]|1[0-2])(?!\d))?", text)
-    if not found:
-        return "9999"
-    month = found.group(2)
-    if not month:
-        named = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|t|tember|ober|ember)?\b", text)
-        month = f"{_MONTHS[named.group(1)]:02d}" if named else "13"
-    return f"{found.group(1)}-{month}"
+    keys = []
+    for found in re.finditer(r"(?<!\d)(20\d\d)(?:-(0[1-9]|1[0-2])(?!\d))?", text):
+        if int(found.group(1)) < this_year:
+            continue
+        month = found.group(2)
+        if not month:
+            named = re.search(r"\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)(?:uary|ruary|ch|il|e|y|ust|t|tember|"
+                              r"ober|ember)?\.?\s*$", text[max(0, found.start() - 12):found.start()])
+            month = f"{_MONTHS[named.group(1)]:02d}" if named else "13"
+        keys.append(f"{found.group(1)}-{month}")
+    return min(keys) if keys else "9999"
 
 
 def calendar(county: str | None = None, state: str | None = None, db_path: str | Path | None = None,
