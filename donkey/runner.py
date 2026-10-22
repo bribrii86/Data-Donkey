@@ -240,7 +240,7 @@ class ConsoleClient:
 
 class Settings(dict):
     """agent_id, environment_id, api_key, monthly_cap_cents, run_cap_cents, notices_cap_cents, locality_cap_cents,
-    minutes_cap_cents, locality_max_rows, bodies_file, area, timeout_minutes, home."""
+    minutes_cap_cents, public_leases_cap_cents, locality_max_rows, bodies_file, area, timeout_minutes, home."""
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -279,6 +279,9 @@ def load_settings(env: dict[str, str] | None = None, home: Path | None = None) -
         notices_cap_cents=_cents(merged.get("DONKEY_NOTICES_CAP_USD", "1.50"), "DONKEY_NOTICES_CAP_USD"),
         locality_cap_cents=_cents(merged.get("DONKEY_LOCALITY_CAP_USD", "5"), "DONKEY_LOCALITY_CAP_USD"),
         minutes_cap_cents=_cents(merged.get("DONKEY_MINUTES_CAP_USD", "3"), "DONKEY_MINUTES_CAP_USD"),
+        # v0.6.9 public-leases job: one cap for the whole run (all batches), inside the monthly cap.
+        public_leases_cap_cents=_cents(merged.get("DONKEY_PUBLIC_LEASES_CAP_USD", "25"),
+                                       "DONKEY_PUBLIC_LEASES_CAP_USD"),
         crawl_cap_cents=_cents(merged.get("DONKEY_CRAWL_CAP_USD", "2"), "DONKEY_CRAWL_CAP_USD"),
         crawl_model=merged.get("DONKEY_CRAWL_MODEL", ""),  # crawl-ab only; blank = crawl.DEFAULT_MODEL
         locality_max_rows=max(0, int(merged.get("DONKEY_LOCALITY_MAX_ROWS", "60"))),

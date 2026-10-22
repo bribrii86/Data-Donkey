@@ -376,3 +376,38 @@ ingested under another map (same bytes) is refused with a note naming that map.
 First list: Casa Grande NextRequest #26-330 (2026-10-19), 1,176 licenses issued 2026-01-01 to 2026-10-01 (no 2025
 rows), all in 85122/85193/85194; 41 issued in the 60 days before 2026-10-19. Commercial use declared under A.R.S.
 39-121.03: the file stays out of the repo (project files data/casa_grande/).
+
+## Public-body copier lease calendar, any county (v0.6.9)
+
+Public bodies approve copier leases in open meetings, so their minutes and packets name the dealer, lessor, make,
+term and price. Findings are stored as `public_lease` events (source map `public-leases`, one row per body per check,
+dated the check day; status `lease_found`, `lead`, `vendor_known`, `nothing_public` or `blocked`).
+
+```
+python -m donkey bodies-prompt --county Maricopa            # free: research prompt that builds bodies-maricopa-az.csv
+python -m donkey public-leases --county Pinal --bodies bodies.csv --dry-run   # free: batches, budget, prompt
+python -m donkey public-leases --county Pinal --bodies bodies.csv             # paid, capped
+python -m donkey public-leases-import --file public_body_copier_leases.csv --county Pinal   # free: hand-built list
+python -m donkey public-lease-calendar --county Pinal --out Desktop\pinal-leases       # CSV + XLSX
+```
+
+- The bodies CSV uses the board-minutes format (body_name, body_type, zip_or_area, agendas_url, minutes_url).
+- `public-leases` sends 15 bodies per Console agent session. One cap covers the whole run
+  (DONKEY_PUBLIC_LEASES_CAP_USD, default $25), split across the sessions, inside the monthly cap. It is not part of
+  growth-weekly.
+- In Arizona each body gets the months of its stored UCC filings (debtor name has the body's distinctive words and
+  kind, and the same district number) so the agent reads the meetings just before them; elsewhere it searches minutes
+  since 2019. It stops on a body once the lease is found.
+- A body with a lease, lead or vendor found in the last 365 days is skipped on the next run; a nothing_public or
+  blocked body is skipped for 90 days. Two rows for one body keep the better finding, and the calendar never lets a
+  newer empty re-read hide an older lease.
+- The $25 run cap counts against the monthly cap (DONKEY_MONTHLY_CAP_USD; the weekly jobs need about $15.50 a week),
+  so raise the month or lower the run cap before a big county.
+- Calendar CSV cells that start with = + - @ get a leading ' so Excel never runs them; only http(s) source links
+  are kept.
+- `public-lease-calendar` lists the latest finding per body, soonest next opening first (unknown last); `--all` adds
+  nothing_public and blocked bodies.
+- `public-leases-import` takes loose headers (Body, Finding/Status, Dealer, Lender, Brand, Next opening, Source,
+  Angle/Notes, ...). Use the exact status values when you can (loose words like "not found" are read, but negatives win). Rows without a body name are skipped and counted. With no status column the status comes from
+  the row: dealer plus term or amount = lease_found, dealer/lessor/make alone = vendor_known (lead with a next
+  opening), else nothing_public.
