@@ -242,15 +242,15 @@ def looks_home_based(legal_name: str, street: str, dba: str = "") -> bool:
 def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since: date) -> Iterable[dict]:
     """v0.6.5: city business licenses (source map city-licenses). Cities reissue every renewal on Jan 1 and the list
     has no new/renewal flag, so a Jan 1 issue date never scores. v0.6.12: nor does a license for a business that
-    already held one more than NEW_LICENSE_LOOKBACK_DAYS earlier (same business row, or same name + ZIP, any name the
-    city lists), e.g. an existing shop's new 2026 license once the 2025 list is loaded."""
+    already held one more than NEW_LICENSE_LOOKBACK_DAYS earlier (same business row, or same trade name + ZIP), e.g. an existing shop's new 2026 license once the 2025 list is loaded."""
     start = (as_of - timedelta(days=NEW_LICENSE_LOOKBACK_DAYS)).isoformat()
     first: dict[object, str] = {}  # earliest license date per business row and per name + ZIP
     for old in con.execute("SELECT business_id, event_date, details_json FROM events WHERE kind = 'new_license' "
                            "AND event_date != ''"):
         known = json.loads(old["details_json"])
-        for key in ([old["business_id"]] if old["business_id"] else []) + [
-                (_norm(n), (known.get("zip") or "")[:5]) for n in (known.get("name"), known.get("legal_name")) if n]:
+        old_zip = (known.get("zip") or "")[:5]
+        for key in ([old["business_id"]] if old["business_id"] else []) + (
+                [(_norm(known["name"]), old_zip)] if known.get("name") and old_zip else []):
             if key not in first or old["event_date"] < first[key]:
                 first[key] = old["event_date"]
     rows = con.execute("SELECT * FROM events WHERE kind = 'new_license' AND event_date >= ? AND event_date <= ?",
@@ -266,8 +266,9 @@ def _license_hits(con: sqlite3.Connection, area: dict | None, as_of: date, since
         if area and not areas.contains(area, zip_code, row["town"] or ""):
             continue
         cutoff = (date.fromisoformat(row["event_date"][:10]) - timedelta(days=NEW_LICENSE_LOOKBACK_DAYS)).isoformat()
-        keys = ([row["business_id"]] if row["business_id"] else []) + [
-            (_norm(n), zip_code[:5]) for n in (name, details.get("legal_name")) if n]
+        # trade name only: an owner's (legal name's) second business is still new
+        keys = ([row["business_id"]] if row["business_id"] else []) + (
+            [(_norm(name), zip_code[:5])] if name and zip_code[:5] else [])
         if any(first.get(key, "9999") < cutoff for key in keys):
             continue  # licensed before: not a new business
         yield {"name": name, "zip": zip_code, "town": row["town"] or "", "score": SCORES["new_license"],
