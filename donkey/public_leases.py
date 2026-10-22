@@ -296,19 +296,20 @@ def import_file(path: str | Path, county: str, state: str = "AZ", received_from:
                 db_path: str | Path | None = None, checked: str = "", home: Path | None = None) -> dict[str, Any]:
     """Store a hand-built findings CSV (free). Any of these headers work: body/body_name/name, status/finding/result,
     dealer, lessor/lender, make/brand/models, units, term/term_months, monthly/monthly_amount, annual/annual_amount,
-    contract/contract_vehicle/rfp, approved/approved_date/date, next_opening/next/opening, source/source_url/url,
-    notes/note/angle, zip, town. checked_date defaults to today."""
+    contract/contract_vehicle/rfp, approved/approved_date/meeting_date/date, next_opening/est_next_opening/next,
+    source/source_url/url, notes/note/angle, zip, town. A plain `amount` goes to monthly or annual when it says /mo
+    or /yr, else into notes; `ucc_filing` goes into notes. checked_date defaults to today."""
     county = re.sub(r"\s+county$", "", county.strip(), flags=re.I)
     if not county:
         raise ValueError("county is required, e.g. Pinal")
-    aliases = {"body_name": ("body_name", "body", "name", "public_body"), "status": ("status", "finding", "result"),
+    aliases = {"body_name": ("body_name", "body", "name", "public_body"), "status": ("status", "finding", "found", "result"),
                "dealer": ("dealer", "vendor", "incumbent_dealer"), "lessor": ("lessor", "lender", "finance_company"),
                "make": ("make", "brand", "models", "equipment"), "units": ("units", "machines", "quantity"),
                "term_months": ("term_months", "term"), "monthly_amount": ("monthly_amount", "monthly", "per_month"),
                "annual_amount": ("annual_amount", "annual", "per_year"),
                "contract_vehicle": ("contract_vehicle", "contract", "rfp", "co_op", "coop"),
-               "approved_date": ("approved_date", "approved", "board_date", "date"),
-               "next_opening": ("next_opening", "next", "opening", "lease_end", "lease_end_est"),
+               "approved_date": ("approved_date", "approved", "board_date", "meeting_date", "date"),
+               "next_opening": ("next_opening", "est_next_opening", "next", "opening", "lease_end", "lease_end_est"),
                "source_url": ("source_url", "source", "url", "link"), "notes": ("notes", "note", "angle", "summary"),
                "zip": ("zip", "zip_or_area"), "town": ("town", "city")}
     day = checked or datetime.now(timezone.utc).date().isoformat()
@@ -320,6 +321,15 @@ def import_file(path: str | Path, county: str, state: str = "AZ", received_from:
         if not row["body_name"]:
             unnamed += 1
             continue
+        amount = lower.get("amount", "")
+        if amount and not (row["monthly_amount"] or row["annual_amount"]):
+            if re.search(r"/\s*mo|month|monthly", amount, re.I):
+                row["monthly_amount"] = (re.findall(r"[\d,]+(?:\.\d+)?", amount) or [""])[0]
+            elif re.search(r"/\s*y|year|annual", amount, re.I):
+                row["annual_amount"] = (re.findall(r"[\d,]+(?:\.\d+)?", amount) or [""])[0]
+        extra = [f"{label}: {lower[key]}" for key, label in (("amount", "amount"), ("ucc_filing", "UCC"))
+                 if lower.get(key) and not (key == "amount" and (row["monthly_amount"] or row["annual_amount"]))]
+        row["notes"] = " ".join(filter(None, [row["notes"], *(f"({e})" for e in extra)]))
         place = _place(row["zip"]) if row["zip"] else {"zip": "", "town": row["town"]}
         row = _clean({**row, **place, "county": county, "state": state.upper(), "checked_date": day})
         row["status"] = row["status"] or _infer(row)

@@ -408,6 +408,6 @@ python -m donkey public-lease-calendar --county Pinal --out Desktop\pinal-leases
 - `public-lease-calendar` lists the latest finding per body, soonest next opening first (unknown last); `--all` adds
   nothing_public and blocked bodies.
 - `public-leases-import` takes loose headers (Body, Finding/Status, Dealer, Lender, Brand, Next opening, Source,
-  Angle/Notes, ...). Use the exact status values when you can (loose words like "not found" are read, but negatives win). Rows without a body name are skipped and counted. With no status column the status comes from
+  Angle/Notes, Found, Meeting_date, Est_next_opening, ...; a plain Amount becomes monthly or annual when it says /mo or /yr, else a note, and Ucc_filing becomes a note). Use the exact status values when you can (loose words like "not found" are read, but negatives win). Rows without a body name are skipped and counted. With no status column the status comes from
   the row: dealer plus term or amount = lease_found, dealer/lessor/make alone = vendor_known (lead with a next
   opening), else nothing_public.

@@ -170,3 +170,21 @@ def test_cli_bodies_prompt_and_calendar(tmp_path, monkeypatch, capsys):
     connect().close()
     assert main(["public-lease-calendar", "--county", "Pinal"]) == 0
     assert "0 public bodies" in capsys.readouterr().out
+
+
+def test_import_buck_hand_built_headers(tmp_path):
+    db = tmp_path / "donkey.db"
+    hand = tmp_path / "public_body_copier_leases.csv"
+    hand.write_text("body,town,found,dealer,lessor,equipment,term,amount,contract_vehicle,meeting_date,ucc_filing,"
+                    "est_next_opening,source_url,note\n"
+                    "Toltec SD #22,Toltec,strong lead,,,9 Kyocera,36 months,\"$1,759.65/mo\",AEPA,2021-09-27,,"
+                    "2027-09,https://toltec.test/x,FMV lease.\n"
+                    "Coolidge USD #21,Coolidge,full lease,Imagine Technology,U.S. Bank,Sharp,60,\"$803K total\","
+                    "Sourcewell,2025-07-09,2025-07-20 U.S. Bank,2030-07,,\n", encoding="utf8")
+    public_leases.import_file(hand, "Pinal", db_path=db, home=tmp_path)
+    rows = {r["body_name"]: r for r in public_leases.calendar("Pinal", db_path=db)}
+    assert rows["Toltec SD #22"]["next_opening"] == "2027-09" and rows["Toltec SD #22"]["monthly_amount"] == "1759.65"
+    assert rows["Toltec SD #22"]["approved_date"] == "2021-09-27" and rows["Toltec SD #22"]["status"] == "lead"
+    coolidge = rows["Coolidge USD #21"]
+    assert coolidge["status"] == "lease_found" and coolidge["next_opening"] == "2030-07"
+    assert "(amount: $803K total)" in coolidge["notes"] and "(UCC: 2025-07-20 U.S. Bank)" in coolidge["notes"]
