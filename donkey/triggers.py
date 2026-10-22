@@ -307,6 +307,7 @@ def call_this_week(
             item["board_note"] = "; ".join(f"{h['date']}: {h['summary']}" for h in sorted(
                 notes, key=lambda h: h["date"], reverse=True)[:2] if h["summary"])
         _contacts(con, ranked)
+        _property(con, ranked)
         categories, growing = _categories(con), _growing(con, today)
         for item in ranked:
             _boost(item, categories.get(_key(item["name"], item["zip"]), ""),
@@ -370,6 +371,52 @@ def _contact(con: sqlite3.Connection, item: dict, has_keys: bool) -> None:
         item["website"] = f"https://{row['domain_key']}" if row["domain_key"] else ""
 
 
+def _property(con: sqlite3.Connection, ranked: list[dict]) -> None:
+    """v0.6.8: the building's owner, from the parcels table (`parcels-pull`), for a business whose street matches one
+    parcel owner in its ZIP: `property` = owner, owner_city, owner_state, owns_building (owner's name like the
+    business's), out_of_state, year_built, sale_date, sale_price, plus a one-line `property_note`. An unknown who-decides
+    becomes corporate when the business owns its building from a mailing address outside Arizona (a landlord's address
+    says nothing about the tenant). No parcels table: nothing, never an error."""
+    for item in ranked:
+        item.update(property={}, property_note="")
+    try:
+        rows = con.execute("SELECT * FROM parcels").fetchall()
+    except sqlite3.Error:
+        return
+    by_key: dict[tuple[str, str], list[sqlite3.Row]] = {}
+    for row in rows:
+        key = _street_key(row["site_street"])
+        if key:
+            by_key.setdefault((row["site_zip"][:5], key), []).append(row)
+    for item in ranked:
+        zip5 = re.sub(r"[^0-9]", "", item["zip"] or "")[:5]
+        street = next((d["street"] for d in item["details"] if d.get("street")), "") or (item.get("address") or "").split(",")[0]
+        key = _street_key(street)
+        if not zip5 or not key:
+            continue
+        found = by_key.get((zip5, key), [])
+        if len({r["owner"].casefold() for r in found}) != 1:
+            continue  # no parcel, or a building split among owners: can't say whose
+        row = max(found, key=lambda r: (r["sale_date"], r["year_built"]))
+        owns = _owns(row["owner"], item["name"])
+        state = row["owner_state"]
+        out = bool(state) and state != "AZ"
+        item["property"] = {"owner": row["owner"], "owner_city": row["owner_city"].title(), "owner_state": state,
+                            "owns_building": owns, "out_of_state": out, "year_built": row["year_built"],
+                            "sale_date": row["sale_date"], "sale_price": row["sale_price"]}
+        where = ", ".join(x for x in (row["owner_city"].title(), state) if x)
+        bits = [f"{'owns its building' if owns else 'building owner'}: {row['owner'].title()}" + (f" ({where})" if where else "")]
+        if row["year_built"]:
+            bits.append(f"built {row['year_built']}")
+        if row["sale_date"]:
+            bits.append(f"last sold {row['sale_date'][:7]}")
+        item["property_note"] = "; ".join(bits)
+        answer = item.get("locality") or {}
+        if owns and out and answer.get("value", "unknown") == "unknown":
+            item["locality"] = {**answer, "value": "corporate", "confidence": "medium", "source": "parcels",
+                                "evidence": f"owns its building from a mailing address in {where}"}
+
+
 def _listed_by_zip(con: sqlite3.Connection) -> dict[str, list[dict]]:
     """Places in the latest snapshot of each list (Overture, town lists) by 5-digit ZIP, with their name and street
     keys and a phone and website cleaned like the businesses keys (no toll-free numbers, no social or site-builder
@@ -418,6 +465,23 @@ def _from_listings(item: dict, listed: dict[str, list[dict]]) -> None:
     if not item["address"] and pick["street"]:
         town = (pick["city"] or item["town"] or "").strip().title()
         item["address"] = ", ".join(x for x in (pick["street"], town, f"AZ {zip5}") if x)
+
+
+_PLAIN_WORDS = {"az", "arizona", "arizonacity", "pinal", "maricopa", "casa", "grande", "city", "eloy", "coolidge",
+                "florence", "stanfield", "picacho", "toltec", "valley", "farms", "hidden", "ak", "chin", "desert",
+                "holdings", "holding", "properties", "property", "realty", "investments", "investment", "trust",
+                "family", "partners", "partnership", "capital", "management", "group", "enterprises", "ventures",
+                "company", "co", "the", "of", "and", "real", "estate", "land", "rentals"}
+
+
+def _owns(owner: str, name: str) -> bool:
+    """The parcel owner is the business itself: the same name, or the same distinctive words (two or more) once
+    town and landlord words are dropped. "Casa Grande Holdings" never owns "Casa Grande Dental"."""
+    owner, name = _norm(owner), _norm(name)
+    if owner and owner == name:
+        return True
+    theirs, ours = set(owner.split()) - _PLAIN_WORDS, set(name.split()) - _PLAIN_WORDS
+    return len(ours) >= 2 and theirs == ours
 
 
 def _alike_words(words: set[str], other: str) -> bool:

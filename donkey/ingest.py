@@ -526,7 +526,20 @@ def main(argv: list[str] | None = None) -> int:
     ovt = commands.add_parser("overture-snapshot", help="free: store Overture releases for an area and diff them")
     ovt.add_argument("--area", default="stephanie", help="area from areas.json (needs a bbox)")
     ovt.add_argument("--release", help="one release, e.g. 2026-09-23.0 (default: every release not yet stored)")
+    parcels = commands.add_parser("parcels-pull", help="free: store the area's non-residential Pinal parcels (building "
+                                                       "owner, mailing address, year built, last sale)")
+    parcels.add_argument("--area", default="stephanie", help="area from areas.json")
     args = parser.parse_args(argv)
+    if args.command == "parcels-pull":
+        from . import parcels as parcel_layer
+
+        try:
+            done = parcel_layer.pull(args.area)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
+            print(f"parcels-pull failed: {exc}", file=sys.stderr)
+            return 1
+        print(f"{done['parcels']} parcels stored for area {done['area']}")
+        return 0
     if args.command == "overture-snapshot":
         from . import overture
 
@@ -569,6 +582,12 @@ def main(argv: list[str] | None = None) -> int:
                         print(_overture_line(done))
                 except Exception as exc:  # noqa: BLE001 - optional (DuckDB, network); the paid run still goes
                     print(f"Overture check skipped: {exc}", file=sys.stderr)
+                from . import parcels as parcel_layer
+
+                try:  # free, a few requests; building owners for call-this-week
+                    print(f"{parcel_layer.pull(settings['area'])['parcels']} parcels refreshed")
+                except Exception as exc:  # noqa: BLE001 - optional (network); the paid run still goes
+                    print(f"Parcel refresh skipped: {exc}", file=sys.stderr)
         except (OSError, ValueError, RuntimeError, sqlite3.Error) as exc:
             print(f"growth-weekly failed: {exc}", file=sys.stderr)
             return 1
