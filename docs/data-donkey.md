@@ -411,3 +411,7 @@ python -m donkey public-lease-calendar --county Pinal --out Desktop\pinal-leases
   Angle/Notes, Found, Meeting_date, Est_next_opening, ...; a plain Amount becomes monthly or annual when it says /mo or /yr, else a note, and Ucc_filing becomes a note). Use the exact status values when you can (loose words like "not found" are read, but negatives win). Rows without a body name are skipped and counted. With no status column the status comes from
   the row: dealer plus term or amount = lease_found, dealer/lessor/make alone = vendor_known (lead with a next
   opening), else nothing_public.
+
+Since v0.6.12 a license doesn't score when the same business (same row, or same name or legal name and ZIP) already
+had a license more than 60 days before it. Load the previous year's list under `city-licenses` too: its old dates
+never score, and its phones fill in the current businesses.
