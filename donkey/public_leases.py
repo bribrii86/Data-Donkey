@@ -323,10 +323,12 @@ def import_file(path: str | Path, county: str, state: str = "AZ", received_from:
             continue
         amount = lower.get("amount", "")
         if amount and not (row["monthly_amount"] or row["annual_amount"]):
-            if re.search(r"/\s*mo|month|monthly", amount, re.I):
-                row["monthly_amount"] = (re.findall(r"[\d,]+(?:\.\d+)?", amount) or [""])[0]
-            elif re.search(r"/\s*y|year|annual", amount, re.I):
-                row["annual_amount"] = (re.findall(r"[\d,]+(?:\.\d+)?", amount) or [""])[0]
+            # only "$1,759.65/mo" or "49,082.88 per year": the unit right after a plain number; "$803K/yr" or
+            # "$5,000 total over 36 months" stay in notes
+            per = re.fullmatch(r"\s*\$?\s*([\d,]+(?:\.\d+)?)\s*(?:/\s*|per\s+|a\s+)(mo|month|yr|year|annum)\w*\.?\s*",
+                               amount, re.I)
+            if per:
+                row["monthly_amount" if per.group(2).lower().startswith("mo") else "annual_amount"] = per.group(1)
         extra = [f"{label}: {lower[key]}" for key, label in (("amount", "amount"), ("ucc_filing", "UCC"))
                  if lower.get(key) and not (key == "amount" and (row["monthly_amount"] or row["annual_amount"]))]
         row["notes"] = " ".join(filter(None, [row["notes"], *(f"({e})" for e in extra)]))
@@ -348,7 +350,7 @@ def _opening(value: str, this_year: int | None = None) -> str:
     this_year = this_year or date.today().year
     text = (value or "").casefold()
     keys = []
-    for found in re.finditer(r"(?<!\d)(20\d\d)(?:-(0[1-9]|1[0-2])(?!\d))?", text):
+    for found in re.finditer(r"(?<!\d)(20\d\d)(?:-(0[1-9]|1[0-2]))?(?!\d)", text):
         if int(found.group(1)) < this_year:
             continue
         month = found.group(2)

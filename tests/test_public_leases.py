@@ -165,6 +165,7 @@ def test_status_words_and_opening_order():
     assert public_leases._opening("~Sep 2030", 2026) == "2030-09"
     assert public_leases._opening("2027-2028 (est.)", 2026) == "2027-13"
     assert public_leases._opening("IM7000s ~3 years old in 2027", 2026) == "2027-13"
+    assert public_leases._opening("bid 20300 units", 2026) == "9999"
     keys = sorted(["", "about fall 2027", "2027-03", "2026-11-11", "March 2027", "2027-12"], key=lambda v: public_leases._opening(v, 2026))
     assert keys == ["2026-11-11", "2027-03", "March 2027", "2027-12", "about fall 2027", ""]
 
@@ -194,3 +195,15 @@ def test_import_buck_hand_built_headers(tmp_path):
     coolidge = rows["Coolidge USD #21"]
     assert coolidge["status"] == "lease_found" and coolidge["next_opening"] == "2030-07"
     assert "(amount: $803K total)" in coolidge["notes"] and "(UCC: 2025-07-20 U.S. Bank)" in coolidge["notes"]
+
+
+def test_import_amount_only_when_unit_follows_a_plain_number(tmp_path):
+    db = tmp_path / "donkey.db"
+    hand = tmp_path / "amounts.csv"
+    hand.write_text("body,found,dealer,amount\nA District,lead,X,\"$49,082.88 per year\"\n"
+                    "B District,lead,X,\"$5,000 total over 36 months\"\nC District,lead,X,$803K/yr\n", encoding="utf8")
+    public_leases.import_file(hand, "Pinal", db_path=db, home=tmp_path)
+    rows = {r["body_name"]: r for r in public_leases.calendar("Pinal", db_path=db)}
+    assert rows["A District"]["annual_amount"] == "49082.88" and rows["A District"]["monthly_amount"] == ""
+    for name, text in (("B District", "$5,000 total over 36 months"), ("C District", "$803K/yr")):
+        assert rows[name]["monthly_amount"] == rows[name]["annual_amount"] == "" and f"(amount: {text})" in rows[name]["notes"]
