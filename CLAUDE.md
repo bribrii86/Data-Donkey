@@ -6,6 +6,9 @@ places, leads, research. Apps pull from it; the first is the Stephanie sales app
 name). Python package `donkey/` (standard library only), SQLite `~/DataDonkey/donkey.db` (`DONKEY_DB` overrides).
 Docs: docs/data-donkey.md.
 ## Current state (2026-10-22)
+- v0.6.11: public-lease-calendar sorts free-text openings by the earliest year from this year on ("no council item
+  since 2013" = unknown, "~Sep 2030" = 2030-09). Buck's re-import 2026-10-22 17:18 UTC brought the dates in; the old
+  sort put 2013/2024 history first.
 - v0.6.10: `public-leases-import` reads Buck's hand-built list headers (found, meeting_date, est_next_opening,
   amount, ucc_filing). First import on his PC 2026-10-22 17:12 UTC (28 bodies) left every next opening blank; he
   re-imports after this (the newest row per body wins).
