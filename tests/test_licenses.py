@@ -263,3 +263,22 @@ def test_listings_never_borrow_a_neighbor(tmp_path):
     _contacts(con, [kept])  # no listings: the license street still shows
     assert kept["address"].startswith("1004 N Mall Pkwy") and kept["phone"] == ""
     con.close()
+
+
+def test_license_for_a_business_licensed_last_year_is_not_new(tmp_path):
+    """v0.6.12: with the 2025 list loaded, a 2026 license for a business that held one in 2025 doesn't score."""
+    db = tmp_path / "donkey.db"
+    old = [["Sample Test Dental", "Sample Test Dental PLLC", "10 W Test St", "Casa Grande", "AZ", "85122",
+            "BL-25-00001", "2025-01-01", "Service"],
+           ["Other Name DBA", "Jane Q Testperson", "5 S Test Rd Ste 3", "Casa Grande", "AZ", "85122", "BL-25-00009",
+            "2025-03-04", "Service"]]
+    ingest("city-licenses", _licenses(tmp_path / "lic25.csv", old), "test", db)
+    new = [["Sample Test Dental", "Sample Test Dental PLLC", "10 W Test St", "Casa Grande", "AZ", "85122",
+            "BL-26-00001", "2026-09-30", "Service"],
+           ["New Test Name LLC", "Jane Q Testperson", "5 S Test Rd Ste 3", "Casa Grande", "AZ", "85122", "BL-26-00009",
+            "2026-09-15", "Service"],  # same owner (legal name) and ZIP, new trade name: a new business
+           ["Brand New Test Cafe", "Brand New Test Cafe LLC", "9 E Test Rd", "Casa Grande", "AZ", "85122",
+            "BL-26-00010", "2026-09-20", "Restaurant"]]
+    ingest("city-licenses", _licenses(tmp_path / "lic26.csv", new), "test", db)
+    hits = api.call_this_week("stephanie", as_of=TODAY.isoformat(), db_path=db)
+    assert sorted(h["name"] for h in hits) == ["Brand New Test Cafe", "New Test Name LLC"]
